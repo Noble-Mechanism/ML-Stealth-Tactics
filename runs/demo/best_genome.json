@@ -1,0 +1,39 @@
+{
+  "formation": [
+    {
+      "right_m": 2824.18814636942,
+      "forward_m": 125.92392462769203,
+      "up_m": 556.7669941475237
+    },
+    {
+      "right_m": -1832.1677528881946,
+      "forward_m": -1366.4764869553803,
+      "up_m": -912.3924684255425
+    },
+    {
+      "right_m": -2074.263047594713,
+      "forward_m": -609.328663651409,
+      "up_m": 489.5243118156343
+    }
+  ],
+  "commit_range_m": 68862.84063519735,
+  "abort_loss_threshold": 2,
+  "merge_geometry": "drag",
+  "split_left_fraction": 0.43522985301743444,
+  "drag_ship_mask": [
+    false,
+    true,
+    true,
+    false
+  ],
+  "weapon_doctrine": "conservative",
+  "shoot_range_frac": 0.5634546745254421,
+  "post_merge_roles": [
+    "egress",
+    "egress",
+    "cap",
+    "support"
+  ],
+  "commit_alt_bias_m": 1330.7127842313498,
+  "commit_speed_factor": 1.1100795306006748
+}

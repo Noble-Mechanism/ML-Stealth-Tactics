@@ -1,0 +1,62 @@
+# Default MVP scenario: 4 BlueStealth vs 3 RedFighter
+# Geometry: Blue ingress from south; Red on north CAP / intercept heading south.
+# Positions in local ENU meters (origin ≈ 35N, 115W).
+
+name: default_4v3
+description: >
+  Four generic LO/stealth fighters (Blue) vs three fighters (Red) on a fixed
+  intercept presentation. Blue package starts ~40 nm south; Red CAP ~40 nm north.
+red_mode: intercept  # intercept | cap
+
+blue:
+  - id: B1
+    name: BlueStealth-1
+    x: 0
+    y: -42000
+    alt: 9200
+    heading_rad: 0.0          # north
+    speed_mps: 260
+  - id: B2
+    name: BlueStealth-2
+    x: 1800
+    y: -42800
+    alt: 9000
+    heading_rad: 0.0
+    speed_mps: 260
+  - id: B3
+    name: BlueStealth-3
+    x: -1800
+    y: -42800
+    alt: 9000
+    heading_rad: 0.0
+    speed_mps: 260
+  - id: B4
+    name: BlueStealth-4
+    x: 0
+    y: -44500
+    alt: 9500
+    heading_rad: 0.0
+    speed_mps: 255
+
+red:
+  - id: R1
+    name: RedFighter-1
+    x: -2000
+    y: 38000
+    alt: 8500
+    heading_rad: 3.14159      # south
+    speed_mps: 250
+  - id: R2
+    name: RedFighter-2
+    x: 2000
+    y: 38000
+    alt: 8600
+    heading_rad: 3.14159
+    speed_mps: 250
+  - id: R3
+    name: RedFighter-3
+    x: 0
+    y: 40000
+    alt: 8800
+    heading_rad: 3.14159
+    speed_mps: 255

@@ -1,0 +1,49 @@
+name: cap_4v2
+description: Four BlueStealth vs two RedFighters holding CAP until detection.
+red_mode: cap
+
+blue:
+  - id: B1
+    name: BlueStealth-1
+    x: 0
+    y: -50000
+    alt: 9000
+    heading_rad: 0.0
+    speed_mps: 260
+  - id: B2
+    name: BlueStealth-2
+    x: 2000
+    y: -51000
+    alt: 9000
+    heading_rad: 0.0
+    speed_mps: 260
+  - id: B3
+    name: BlueStealth-3
+    x: -2000
+    y: -51000
+    alt: 9000
+    heading_rad: 0.0
+    speed_mps: 260
+  - id: B4
+    name: BlueStealth-4
+    x: 0
+    y: -53000
+    alt: 9500
+    heading_rad: 0.0
+    speed_mps: 255
+
+red:
+  - id: R1
+    name: RedFighter-1
+    x: -3000
+    y: 20000
+    alt: 8000
+    heading_rad: 1.57
+    speed_mps: 240
+  - id: R2
+    name: RedFighter-2
+    x: 3000
+    y: 20000
+    alt: 8000
+    heading_rad: 4.71
+    speed_mps: 240

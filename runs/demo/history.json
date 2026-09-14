@@ -1,0 +1,42 @@
+[
+  {
+    "generation": 0,
+    "best_fitness": 67.0,
+    "mean_fitness": 51.5,
+    "best_kills": 2,
+    "best_losses": 1,
+    "best_winner": "draw"
+  },
+  {
+    "generation": 1,
+    "best_fitness": 67.0,
+    "mean_fitness": 56.75,
+    "best_kills": 2,
+    "best_losses": 1,
+    "best_winner": "draw"
+  },
+  {
+    "generation": 2,
+    "best_fitness": 67.0,
+    "mean_fitness": 64.0,
+    "best_kills": 2,
+    "best_losses": 1,
+    "best_winner": "draw"
+  },
+  {
+    "generation": 3,
+    "best_fitness": 67.0,
+    "mean_fitness": 54.666666666666664,
+    "best_kills": 2,
+    "best_losses": 1,
+    "best_winner": "draw"
+  },
+  {
+    "generation": 4,
+    "best_fitness": 67.0,
+    "mean_fitness": 52.333333333333336,
+    "best_kills": 2,
+    "best_losses": 1,
+    "best_winner": "draw"
+  }
+]

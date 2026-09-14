@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stealth-tactics"
+version = "0.1.0"
+description = "GA-evolved stealth fighter tactics simulation with TacView ACMI export"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Rusty Shackleford" }]
+dependencies = [
+    "numpy>=1.24,<3",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+stealth-tactics = "stealth_tactics.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stealth_tactics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
