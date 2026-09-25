@@ -8,9 +8,13 @@ from typing import Optional
 
 import numpy as np
 
+from .sensor_config import DEFAULT_SENSOR_CONFIG as _SC, F35_KEY, RED_KEY
+
 
 class AircraftType(str, Enum):
-    BLUE_STEALTH = "BlueStealth"
+    # TacView-friendly display name. Performance/RCS below are generic LO
+    # placeholders labeled F-35 for visualization only — NOT real F-35 data.
+    F35 = "F-35"
     RED_FIGHTER = "RedFighter"
 
 
@@ -32,21 +36,23 @@ class AircraftTypeParams:
     min_alt_m: float = 100.0
     rcs_factor: float = 1.0  # relative RCS (stealth << 1)
     radar_range_m: float = 80000.0
-    missile_range_m: float = 40000.0
-    missile_pk: float = 0.55
+    # Missile range and Pk are no longer per type (Spec 3a): both sides carry the
+    # same missile (SensorConfig.missile_kinematics; Rmax from the envelope table).
     ammo: int = 4
 
 
-BLUE_STEALTH_PARAMS = AircraftTypeParams(
+# Unclassified generic LO placeholders labeled F-35 for TacView visualization only.
+# These are NOT real F-35 performance or RCS numbers — same numeric stealth
+# advantage as the former BlueStealth placeholders (rcs_factor=0.05, etc.).
+F35_PARAMS = AircraftTypeParams(
     max_speed_mps=340.0,
     min_speed_mps=90.0,
     cruise_speed_mps=260.0,
     max_turn_rate_deg_s=11.0,
     max_climb_rate_mps=90.0,
-    rcs_factor=0.05,  # stealth advantage
-    radar_range_m=90000.0,
-    missile_range_m=45000.0,
-    missile_pk=0.60,
+    # Sensor numbers live in sensor_config.py (single source of truth).
+    rcs_factor=_SC.signature.tables[F35_KEY][0][1],  # nose-on value of LO table
+    radar_range_m=_SC.radar.ref_range_m[F35_KEY],
     ammo=4,
 )
 
@@ -56,10 +62,8 @@ RED_FIGHTER_PARAMS = AircraftTypeParams(
     cruise_speed_mps=255.0,
     max_turn_rate_deg_s=13.0,
     max_climb_rate_mps=85.0,
-    rcs_factor=1.0,
-    radar_range_m=70000.0,
-    missile_range_m=38000.0,
-    missile_pk=0.50,
+    rcs_factor=_SC.signature.isotropic_rcs[RED_KEY],
+    radar_range_m=_SC.radar.ref_range_m[RED_KEY],
     ammo=4,
 )
 
@@ -92,11 +96,13 @@ class AircraftState:
 @dataclass
 class Aircraft:
     id: str
-    name: str
+    name: str  # ship callsign → ACMI Pilot=
     ac_type: AircraftType
     coalition: Coalition
     state: AircraftState
     params: AircraftTypeParams
+    # TacView database Name= (F-35A matches Lightning II; callsign stays in Pilot=)
+    type_name: str = ""
     ammo: int = 4
     locked_target: Optional[str] = None
     role: str = "fighter"
@@ -112,16 +118,22 @@ class Aircraft:
         self.cmd_heading_rad = self.state.heading_rad
         self.cmd_speed_mps = self.state.speed_mps
         self.cmd_alt_m = self.state.alt
+        if not self.type_name:
+            if self.ac_type == AircraftType.F35:
+                self.type_name = "F-35A"
+            else:
+                # Keep Red ACMI Name= callsign (unchanged behavior)
+                self.type_name = self.name
 
     @staticmethod
     def make_blue(uid: str, name: str, state: AircraftState) -> Aircraft:
         return Aircraft(
             id=uid,
             name=name,
-            ac_type=AircraftType.BLUE_STEALTH,
+            ac_type=AircraftType.F35,
             coalition=Coalition.BLUE,
             state=state,
-            params=BLUE_STEALTH_PARAMS,
+            params=F35_PARAMS,
         )
 
     @staticmethod

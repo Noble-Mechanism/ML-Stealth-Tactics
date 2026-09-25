@@ -7,7 +7,7 @@ MVP: GA evolves high-level tactics for a **4-ship of generic stealth fighters (B
 versus a **fixed bandit presentation (Red)**. The best engagement exports as
 `.txt.acmi` openable in TacView.
 
-> Generic labels only (`BlueStealth` / `RedFighter`) — no classified aircraft data.
+> Blue ACMI `Name=F-35A` (TacView Lightning II DB match); ship callsigns (`F-35-1`…) go in `Pilot=`. Performance/RCS remain unclassified generic LO placeholders — not real F-35 data. Red remains `RedFighter`.
 
 ## Install
 
@@ -42,6 +42,57 @@ Single engagement with default (or saved) genome:
 python -m stealth_tactics simulate -s default_4v3.yaml -o artifacts
 ```
 
+## Sensor model tools (Spec 1)
+
+```bash
+# First-detection range table (analytic R50 + empirical closing runs)
+python -m stealth_tactics sensors-table --seeds 300 -o spec1_outputs/sensor_table.txt
+# Scripted 1v1 replays: head-on vs F-35 beaming at 30 NM (ACMI + event log)
+python -m stealth_tactics sensor-replays --seed 1 -o spec1_outputs
+```
+
+See `docs/specs/01-sensors.md` (all parameters in `stealth_tactics/sim/sensor_config.py`).
+
+## Track sharing tools (Spec 2)
+
+```bash
+# Replay A (launch on remote + support handoff, with 100-seed hit rate) and
+# Replay B (passive IRST triangulation: ACMI with 'TRI est' marker + error table)
+python -m stealth_tactics datalink-replays --seed-a 1 --seed-b 1 --stats-seeds 100 -o spec2_outputs
+# Replay C (lead-trail: lead shoots at max range + turns out, trail supports) + 3-way comparison
+python -m stealth_tactics datalink-replays --scenario lead-trail --seed-c 1 -o spec2_outputs
+# Spec 2b: Blue 50 NM FC gate lock stability (head-on, 100 seeds)
+python -m stealth_tactics datalink-replays --scenario fc-lock -o spec2_outputs
+```
+
+See `docs/specs/02-track-sharing.md` (parameters in `SensorConfig.datalink`) and
+`docs/specs/02b-coast-and-lock.md` (missile coast, Blue 50 NM FC gate).
+
+## Missile kinematics tools (Spec 3a)
+
+```bash
+# Calibration check, 704-shot sweep (10-60 NM x shooter Mach x altitude x target
+# behavior), Rmax / Rne summary (sim path + lookup table) and 3 TacView replays
+python -m stealth_tactics missile-sweep -o spec3a_outputs
+# Off-nose axis of the Rmax table vs the full sim (+ random-grid check)
+python -m stealth_tactics.analysis.off_nose_check
+# Launch on remote: hit rate vs shot range (fraction of table Rmax)
+python -m stealth_tactics datalink-replays --scenario launch-on-remote \
+    --shot-frac-sweep 0.95,0.85,0.75,0.65 -o spec3a_outputs
+```
+
+Both sides carry the same missile: point-mass fly-out (boost, Mach-dependent drag,
+1976 standard atmosphere, induced drag, g limit), PN guidance, kinematic defeat
+below Mach 1.2 / when no longer closing, Pk 0.60 × endgame-energy × support /
+coast factors. Launches are gated by an Rmax lookup table (altitude, shooter
+Mach, target aspect, target Mach, launch angle off the shooter's nose) built
+from the model at first use (~1.5 min on 8 cores in a process pool;
+`STEALTH_TACTICS_ENV_WORKERS=1` for serial, ~9 min) and cached in
+`~/.cache/stealth_tactics` (`STEALTH_TACTICS_CACHE_DIR` to move it, `off` to
+disable). Coast timeout 40 s, flight-time cap 180 s. See
+`docs/specs/03a-missile-kinematics.md` (parameters in
+`SensorConfig.missile_kinematics`).
+
 ## Tests
 
 ```bash
@@ -60,21 +111,29 @@ ACMI files are UTF-8 text (`FileType=text/acmi/tacview`, `FileVersion=2.2`).
 
 The genome encodes **formation offsets**, **commit range**, **merge geometry**
 (bracket / hook / drag / sandwich / head-on), **weapon doctrine**, and
-**post-merge roles** — not raw stick inputs. Fitness rewards Blue kills and
-package survival, penalizes Blue losses, and adds a bonus for faster Blue wins
-plus a small ammo term. See `docs/design.md` for models and assumptions.
+**post-merge roles** — not raw stick inputs. Fitness prioritizes **kills**,
+penalizes Blue losses, rewards faster wins **only when kills > 0**, and
+explicitly punishes flee-with-0-kills. Sensors (Spec 1): probabilistic radar
+with ±60° field of regard, smooth aspect-dependent F-35 RCS, passive IRST, RWR,
+and per-jet tracks; launches and midcourse support (until ~15 NM) need a
+fire-control quality track. Missiles (Spec 3a) fly a point-mass kinematic model
+and launch inside the table Rmax.
+See `docs/design.md` for models and assumptions.
 
 ## Layout
 
 ```
 stealth_tactics/
-  sim/        # point-mass world, sensors, weapons
+  sim/        # point-mass world, sensors (+ sensor_config, tracks), datalink, fusion,
+              # weapons, missile_kinematics (fly-out), missile_envelope (Rmax table)
+  analysis/   # sensor table, scripted sensor / datalink / missile replays, missile sweep
   tactics/    # genome + interpreter
   ga/         # elitist GA
   acmi/       # ACMI 2.2 exporter
   scenarios/  # YAML/JSON loader
 scenarios/    # default_4v3.yaml, cap_4v2.yaml
-docs/design.md
+docs/design.md, docs/specs/01-sensors.md, docs/specs/02-track-sharing.md,
+docs/specs/02b-coast-and-lock.md, docs/specs/03a-missile-kinematics.md
 tests/
 ```
 

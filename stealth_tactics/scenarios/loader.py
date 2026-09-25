@@ -43,7 +43,7 @@ def build_aircraft(scenario: Scenario) -> List[Aircraft]:
     aircraft: List[Aircraft] = []
     for i, spec in enumerate(scenario.blue):
         uid = spec.get("id", f"B{i+1}")
-        name = spec.get("name", f"BlueStealth-{i+1}")
+        name = spec.get("name", f"F-35-{i+1}")
         st = AircraftState(
             x=float(spec.get("x", 0)),
             y=float(spec.get("y", -40000 + i * 500)),

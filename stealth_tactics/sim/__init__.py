@@ -4,6 +4,8 @@ from .world import World, SimConfig
 from .aircraft import Aircraft, AircraftState, AircraftType
 from .sensors import SensorModel
 from .weapons import WeaponModel, Missile
+from .sensor_config import SensorConfig, DEFAULT_SENSOR_CONFIG
+from .tracks import Track, TrackStore, TrackQuality
 
 __all__ = [
     "World",
@@ -14,4 +16,9 @@ __all__ = [
     "SensorModel",
     "WeaponModel",
     "Missile",
+    "SensorConfig",
+    "DEFAULT_SENSOR_CONFIG",
+    "Track",
+    "TrackStore",
+    "TrackQuality",
 ]

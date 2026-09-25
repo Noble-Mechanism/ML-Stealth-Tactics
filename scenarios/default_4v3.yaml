@@ -1,4 +1,4 @@
-# Default MVP scenario: 4 BlueStealth vs 3 RedFighter
+# Default MVP scenario: 4 F-35 callsigns (ACMI Name=F-35A) vs 3 RedFighter
 # Geometry: Blue ingress from south; Red on north CAP / intercept heading south.
 # Positions in local ENU meters (origin ≈ 35N, 115W).
 
@@ -10,28 +10,28 @@ red_mode: intercept  # intercept | cap
 
 blue:
   - id: B1
-    name: BlueStealth-1
+    name: F-35-1
     x: 0
     y: -42000
     alt: 9200
     heading_rad: 0.0          # north
     speed_mps: 260
   - id: B2
-    name: BlueStealth-2
+    name: F-35-2
     x: 1800
     y: -42800
     alt: 9000
     heading_rad: 0.0
     speed_mps: 260
   - id: B3
-    name: BlueStealth-3
+    name: F-35-3
     x: -1800
     y: -42800
     alt: 9000
     heading_rad: 0.0
     speed_mps: 260
   - id: B4
-    name: BlueStealth-4
+    name: F-35-4
     x: 0
     y: -44500
     alt: 9500

@@ -35,12 +35,17 @@ def test_acmi_header_and_objects(tmp_path: Path) -> None:
 
     # Time frames and objects present
     assert any(l.startswith("#") for l in lines)
-    assert any("BlueStealth" in l for l in lines)
+    # TacView DB name for Lightning II; callsigns stay in Pilot=
+    assert any("Name=F-35A" in l for l in lines)
+    assert any("Pilot=F-35-1" in l for l in lines)
+    assert any("Pilot=F-35-2" in l for l in lines)
     assert any("RedFighter" in l for l in lines)
     assert any("Type=Air+FixedWing" in l for l in lines)
     assert any("Coalition=Blue" in l for l in lines)
     assert any("Coalition=Red" in l for l in lines)
     assert any("T=" in l for l in lines)
+    # Callsign must NOT be used as Name= for Blue (would mismatch TacView DB)
+    assert not any("Name=F-35-1" in l for l in lines)
 
 
 def test_stable_hex_ids() -> None:

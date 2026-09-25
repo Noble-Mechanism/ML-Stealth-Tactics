@@ -16,6 +16,7 @@ from stealth_tactics.sim.aircraft import (
     _wrap_pi,
 )
 from stealth_tactics.sim.world import World
+from stealth_tactics.sim.tracks import TrackQuality
 from .genome import (
     TacticsGenome,
     MergeGeometry,
@@ -127,10 +128,13 @@ class TacticsController:
             role = g.post_merge_roles[ship_i] if ship_i < len(g.post_merge_roles) else PostMergeRole.ENGAGE
             side = self.merge_side.get(ac.id, 1.0)
 
-            # Pick target: nearest red that we track, else nearest
-            tracks = world.tracks.get(ac.id, set())
-            tracked_reds = [r for r in reds if r.id in tracks]
-            pool = tracked_reds if tracked_reds else reds
+            # Pick target on the FUSED picture (Spec 2): nearest red with
+            # fire-control available (own or remote over the link), else nearest
+            # red in the fused picture (own/received/triangulated), else nearest
+            store = world.tracks.get(ac.id)
+            fc_reds = [r for r in reds if world.fire_control_source(ac, r.id) is not None]
+            tracked_reds = [r for r in reds if store is not None and r.id in store.fused]
+            pool = fc_reds or tracked_reds or reds
             tgt = min(pool, key=lambda r: distance_3d(ac.state, r.state))
 
             brg_to_tgt = bearing_to(ac.state, tgt.state)
@@ -189,10 +193,13 @@ class TacticsController:
         g = self.genome
         if ac.ammo <= 0:
             return
-        if ac.id not in world.tracks or tgt.id not in world.tracks.get(ac.id, set()):
+        # Only fire-control quality allows a launch: own FC (Spec 1) or, for
+        # Blue, a flightmate's FC track received over the link (Spec 2)
+        if world.fire_control_source(ac, tgt.id) is None:
             return
 
-        max_r = ac.params.missile_range_m
+        # Spec 3a: Rmax from the envelope table for the current geometry
+        max_r = world.weapons.rmax_m(ac, tgt)
         shoot_r = max_r * g.shoot_range_frac
 
         if g.weapon_doctrine == WeaponDoctrine.CONSERVATIVE:
@@ -231,8 +238,9 @@ class RedCAPController:
         for ac in reds:
             if blues:
                 tgt = min(blues, key=lambda b: distance_3d(ac.state, b.state))
-                tracks = world.tracks.get(ac.id, set())
-                detected = tgt.id in tracks
+                store = world.tracks.get(ac.id)
+                # Any-quality own track (radar / IRST / RWR) wakes a CAP up
+                detected = store is not None and tgt.id in store
 
                 if self.mode == "cap" and not detected:
                     # Lazy CAP: gentle weave
@@ -246,9 +254,11 @@ class RedCAPController:
                     ac.cmd_speed_mps = ac.params.cruise_speed_mps * 1.1
                     ac.cmd_alt_m = tgt.state.alt
                     dist = distance_3d(ac.state, tgt.state)
-                    if detected and dist < ac.params.missile_range_m * 0.8 and ac.ammo > 0:
-                        # Red shoots if lock
-                        if world.sensors.can_lock(ac, tgt):
+                    if (detected and ac.ammo > 0
+                            and dist < 0.8 * world.weapons.rmax_m(ac, tgt)):
+                        # Red shoots only with its own fire-control track
+                        # (or remote FC if the symmetric-policy switch is on)
+                        if world.fire_control_source(ac, tgt.id) is not None:
                             ac.cmd_fire = True
                             ac.fire_target = tgt.id
             else:

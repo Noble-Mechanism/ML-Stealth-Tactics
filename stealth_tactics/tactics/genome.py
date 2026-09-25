@@ -95,6 +95,10 @@ class TacticsGenome:
         d["post_merge_roles"] = [r.value for r in self.post_merge_roles]
         return d
 
+    def copy(self) -> "TacticsGenome":
+        """Deep copy via dict round-trip (safe against in-place elite mutation)."""
+        return TacticsGenome.from_dict(self.to_dict())
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> TacticsGenome:
         form = [FormationOffset(**f) for f in d.get("formation", [])]
