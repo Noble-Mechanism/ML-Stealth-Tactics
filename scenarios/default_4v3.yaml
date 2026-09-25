@@ -8,6 +8,15 @@ description: >
   intercept presentation. Blue package starts ~40 nm south; Red CAP ~40 nm north.
 red_mode: intercept  # intercept | cap
 
+# Spec 3: Red flight aggressiveness a in [0, 1] (spec 4 will draw it):
+# a < 1/3 conservative (lock -> drag), < 2/3 middle (support -> beam), else
+# aggressive (missile active -> crank). red_defense: false = pre-spec-3 Red.
+red_aggressiveness: 0.5
+red_defense: true
+# Firing doctrines: shoot_assess_shoot | shoot_shoot_assess | legacy
+blue_doctrine: shoot_assess_shoot
+red_doctrine: shoot_assess_shoot
+
 blue:
   - id: B1
     name: F-35-1

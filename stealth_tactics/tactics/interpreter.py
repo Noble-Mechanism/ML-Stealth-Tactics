@@ -220,11 +220,18 @@ class RedCAPController:
     """
     Fixed Red bandit presentation: CAP orbit or intercept toward Blue CAP.
     Not evolved — provides a stable evaluation environment.
+
+    Spec 3: with ``defense`` (a ``RedDefense``; default on via the scenario /
+    GA config) each jet runs the RWR-driven defensive state machine
+    (``tactics/red_defense.py``). ``defense=None`` gives the pre-spec-3
+    behaviour (pure pursuit, always shooting when the gates allow).
     """
 
-    def __init__(self, red_ids: List[str], mode: str = "intercept") -> None:
+    def __init__(self, red_ids: List[str], mode: str = "intercept",
+                 defense=None) -> None:
         self.red_ids = list(red_ids)
         self.mode = mode
+        self.defense = defense
         self._t = 0.0
 
     def __call__(self, world: World) -> None:
@@ -242,6 +249,15 @@ class RedCAPController:
                 # Any-quality own track (radar / IRST / RWR) wakes a CAP up
                 detected = store is not None and tgt.id in store
 
+                may_shoot = True
+                if self.defense is not None:
+                    cmd, may_shoot = self.defense.step(world, ac)
+                    if cmd is not None:
+                        cmd.apply(ac)
+                        if may_shoot:      # cranking: existing gates decide
+                            self._maybe_fire(world, ac, tgt, detected)
+                        continue
+
                 if self.mode == "cap" and not detected:
                     # Lazy CAP: gentle weave
                     ac.cmd_heading_rad = _wrap_pi(ac.state.heading_rad + np.deg2rad(3))
@@ -253,14 +269,19 @@ class RedCAPController:
                     ac.cmd_heading_rad = brg
                     ac.cmd_speed_mps = ac.params.cruise_speed_mps * 1.1
                     ac.cmd_alt_m = tgt.state.alt
-                    dist = distance_3d(ac.state, tgt.state)
-                    if (detected and ac.ammo > 0
-                            and dist < 0.8 * world.weapons.rmax_m(ac, tgt)):
-                        # Red shoots only with its own fire-control track
-                        # (or remote FC if the symmetric-policy switch is on)
-                        if world.fire_control_source(ac, tgt.id) is not None:
-                            ac.cmd_fire = True
-                            ac.fire_target = tgt.id
+                    if may_shoot:
+                        self._maybe_fire(world, ac, tgt, detected)
             else:
                 ac.cmd_heading_rad = ac.state.heading_rad
                 ac.cmd_speed_mps = ac.params.cruise_speed_mps
+
+    @staticmethod
+    def _maybe_fire(world: World, ac: Aircraft, tgt: Aircraft, detected: bool) -> None:
+        dist = distance_3d(ac.state, tgt.state)
+        if (detected and ac.ammo > 0 and not ac.departed
+                and dist < 0.8 * world.weapons.rmax_m(ac, tgt)):
+            # Red shoots only with its own fire-control track
+            # (or remote FC if the symmetric-policy switch is on)
+            if world.fire_control_source(ac, tgt.id) is not None:
+                ac.cmd_fire = True
+                ac.fire_target = tgt.id

@@ -59,10 +59,15 @@ class SignatureConfig:
     # the target's nose, 90 = beam, 180 = tail. Interpolated with a piecewise
     # cosine ease (C1-smooth, zero slope at each knot, monotone per segment).
     tables: Dict[str, Tuple[Tuple[float, float], ...]] = field(default_factory=lambda: {
+        # Spec 3 (approved change A): flat best RCS within 20 deg of the nose,
+        # modest penalty for a 35-45 deg crank (Red detection range x1.18 at
+        # 35 deg, x1.24 at 45 deg vs nose-on), steep rise to the beam. Was
+        # (0, .05) (30, .10) (60, .45) (90, .90) (135, .55) (180, .30).
         F35_KEY: (
             (0.0, 0.05),
-            (30.0, 0.10),
-            (60.0, 0.45),
+            (20.0, 0.05),
+            (45.0, 0.12),
+            (70.0, 0.50),
             (90.0, 0.90),
             (135.0, 0.55),
             (180.0, 0.30),
@@ -125,6 +130,14 @@ class RWRConfig:
     })
     bearing_sigma_deg: float = 5.0  # coarse bearing-only contact
     update_period_s: float = 0.0    # 0 => every sim step (0.5 s)
+    # Spec 3 RWR modes (sim/rwr.py): per-mode range factor on the intercept
+    # range above (1.0 = same gate for search / lock / support; e.g. < 1 makes
+    # an LPI lock harder to see). Missile-active warnings have no range gate.
+    mode_range_factor: Dict[str, float] = field(default_factory=lambda: {
+        "search": 1.0, "lock": 1.0, "support": 1.0,
+    })
+    # Own RNG stream for RWR-mode bearing noise so spec 1-3a draws do not shift.
+    mode_rng_salt: int = 0x3D3F
 
 
 # --------------------------------------------------------------- tracks ----

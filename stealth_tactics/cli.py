@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+
+import numpy as np
 import sys
 from pathlib import Path
 
@@ -15,6 +17,12 @@ from stealth_tactics.tactics.genome import TacticsGenome
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _spec3_ga_kwargs(args: argparse.Namespace) -> dict:
+    return {"red_aggressiveness": args.red_aggressiveness,
+            "red_defense": False if args.no_red_defense else None,
+            "blue_doctrine": args.blue_doctrine, "red_doctrine": args.red_doctrine}
 
 
 def cmd_evolve(args: argparse.Namespace) -> int:
@@ -48,6 +56,7 @@ def cmd_evolve(args: argparse.Namespace) -> int:
         sim_dt=args.dt,
         sim_max_time_s=args.max_time,
         elite_count=max(1, args.pop // 10),
+        **_spec3_ga_kwargs(args),
     )
     ga = GeneticAlgorithm(scenario, ga_cfg, on_generation=on_gen)
     print(f"Evolving tactics: pop={ga_cfg.population} gens={ga_cfg.generations} "
@@ -97,7 +106,8 @@ def cmd_simulate(args: argparse.Namespace) -> int:
     else:
         genome = TacticsGenome()
 
-    ga = GeneticAlgorithm(scenario, GAConfig(seed=args.seed, sim_max_time_s=args.max_time))
+    ga = GeneticAlgorithm(scenario, GAConfig(seed=args.seed, sim_max_time_s=args.max_time,
+                                             **_spec3_ga_kwargs(args)))
     result = ga.evaluate(genome, record=True)
 
     out_dir = Path(args.out)
@@ -341,6 +351,51 @@ def cmd_missile_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_defense_replays(args: argparse.Namespace) -> int:
+    """Spec 3 replays A-F (Red defense, Blue test reaction, shoot-shoot-assess)."""
+    from stealth_tactics.analysis.defense_replays import (
+        KINDS, FILES, SEEDS, describe, export, run_defense_replay)
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    which = list(KINDS) if args.scenario == "all" else [args.scenario]
+    log = []
+    for k in which:
+        seed = args.seed if args.seed is not None else SEEDS[k]
+        rep = run_defense_replay(k, seed=seed)
+        p = export(rep, out_dir / FILES[k], f"Spec3 replay {k} - {KINDS[k]}")
+        log += [describe(rep), f"  ACMI -> {p}", ""]
+    text = "\n".join(log)
+    print(text)
+    (out_dir / ("defense_replays.txt" if args.scenario == "all"
+                else f"defense_replay_{args.scenario}.txt")).write_text(text, encoding="utf-8")
+    return 0
+
+
+def cmd_defense_stats(args: argparse.Namespace) -> int:
+    """Spec 3 100-seed stats over aggressiveness x Blue test reaction x doctrine."""
+    import time
+    from stealth_tactics.analysis.defense_stats import (
+        CONFIGS, run_stats, summarize, format_tables)
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    configs = CONFIGS
+    if args.doctrine != "both":
+        configs = [c for c in CONFIGS if c[2] == args.doctrine]
+    t0 = time.time()
+    runs = run_stats(args.seeds, configs, workers=args.workers)
+    summ = [summarize(k, runs[k]) for k in configs]
+    text = format_tables(summ, args.seeds)
+    wall = time.time() - t0
+    text += (f"\nWall time {wall:.0f} s for {len(configs) * args.seeds} engagements "
+             f"(mean per-engagement sim time in the workers "
+             f"{np.mean([s['wall_s'] for s in summ]):.3f} s).\n")
+    print(text)
+    (out_dir / "defense_stats.txt").write_text(text, encoding="utf-8")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="stealth_tactics",
@@ -413,6 +468,34 @@ def main(argv: list[str] | None = None) -> int:
     p_ms.add_argument("-o", "--out", default=None)
     p_ms.set_defaults(func=cmd_missile_sweep)
 
+    p_dr = sub.add_parser("defense-replays",
+                          help="Spec 3 replays A-F: Red defense, Blue test reaction, SSA")
+    p_dr.add_argument("--scenario", default="all",
+                      choices=["all", "A", "B", "C", "D1", "D2", "E", "F"])
+    p_dr.add_argument("--seed", type=int, default=None,
+                      help="override the per-replay default seed")
+    p_dr.add_argument("-o", "--out", default=None)
+    p_dr.set_defaults(func=cmd_defense_replays)
+
+    p_ds = sub.add_parser("defense-stats",
+                          help="Spec 3 multi-seed stats (aggressiveness x test reaction x doctrine)")
+    p_ds.add_argument("--seeds", type=int, default=100)
+    p_ds.add_argument("--doctrine", default="both",
+                      choices=["both", "shoot_assess_shoot", "shoot_shoot_assess"])
+    p_ds.add_argument("--workers", type=int, default=None)
+    p_ds.add_argument("-o", "--out", default=None)
+    p_ds.set_defaults(func=cmd_defense_stats)
+
+    for p in (p_ev, p_sim):
+        p.add_argument("--red-aggressiveness", type=float, default=None,
+                       help="Spec 3: Red flight aggressiveness a in [0,1] (default: scenario)")
+        p.add_argument("--no-red-defense", action="store_true",
+                       help="Spec 3: disable the Red defensive state machine")
+        p.add_argument("--blue-doctrine", default=None,
+                       choices=["shoot_assess_shoot", "shoot_shoot_assess", "legacy"])
+        p.add_argument("--red-doctrine", default=None,
+                       choices=["shoot_assess_shoot", "shoot_shoot_assess", "legacy"])
+
     args = parser.parse_args(argv)
     if args.command == "sensors-table":
         return args.func(args)
@@ -421,7 +504,9 @@ def main(argv: list[str] | None = None) -> int:
         args.out = str(root / {"evolve": "runs/demo",
                                "sensor-replays": "artifacts/spec1",
                                "datalink-replays": "artifacts/spec2",
-                               "missile-sweep": "artifacts/spec3a"}.get(args.command,
+                               "missile-sweep": "artifacts/spec3a",
+                               "defense-replays": "artifacts/spec3",
+                               "defense-stats": "artifacts/spec3"}.get(args.command,
                                                                        "artifacts"))
     return args.func(args)
 

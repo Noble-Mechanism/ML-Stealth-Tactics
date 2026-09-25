@@ -100,7 +100,15 @@ def test_f35_signature_nose_beam_tail() -> None:
         obs = red(30_000 * math.sin(a * DEG), 30_000 * math.cos(a * DEG))
         vals.append(effective_rcs(b, obs))
     assert all(y1 >= y0 - 1e-12 for y0, y1 in zip(vals, vals[1:]))
-    assert max(abs(y1 - y0) for y0, y1 in zip(vals, vals[1:])) < 0.03
+    # Spec 3 change A: steeper 70->90 deg segment (0.50 -> 0.90 over 20 deg,
+    # peak cosine slope 0.031/deg); the old bound was 0.03 for the old table.
+    assert max(abs(y1 - y0) for y0, y1 in zip(vals, vals[1:])) < 0.035
+    # Spec 3 change A: flat within 20 deg of the nose; crank penalty x1.18 / x1.24
+    # in Red detection range at 35 / 45 deg
+    assert vals[20] == pytest.approx(0.05)
+    assert (vals[35] / 0.05) ** 0.25 == pytest.approx(1.18, abs=0.01)
+    assert (vals[45] / 0.05) ** 0.25 == pytest.approx(1.24, abs=0.01)
+    assert vals[70] == pytest.approx(0.50)
     # Red isotropic
     r = red(0, 0, hdg=0.0)
     assert effective_rcs(r, blue(0, 30_000)) == effective_rcs(r, blue(30_000, 0)) == 1.0

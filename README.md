@@ -42,6 +42,11 @@ Single engagement with default (or saved) genome:
 python -m stealth_tactics simulate -s default_4v3.yaml -o artifacts
 ```
 
+Spec 3 options for `evolve` and `simulate`: `--red-aggressiveness A` (0–1, default
+0.5 or the scenario's `red_aggressiveness`), `--no-red-defense` (old pure-pursuit
+Red), `--blue-doctrine` / `--red-doctrine` (`shoot_assess_shoot` default,
+`shoot_shoot_assess`, or `legacy` = ripple all missiles, kept for regression).
+
 ## Sensor model tools (Spec 1)
 
 ```bash
@@ -93,6 +98,24 @@ disable). Coast timeout 40 s, flight-time cap 180 s. See
 `docs/specs/03a-missile-kinematics.md` (parameters in
 `SensorConfig.missile_kinematics`).
 
+## Missile defense tools (Spec 3)
+
+```bash
+# TacView replays A-F (drag/recommit, crank, beam, turn-away limit press/depart,
+# Blue test reaction, shoot-shoot-assess) + event logs with a-pole / f-pole
+python -m stealth_tactics defense-replays -o spec3_outputs
+# 100-seed stats: a in {0,.25,.5,.75,1} x Blue test reaction off/on x Blue doctrine
+python -m stealth_tactics defense-stats --seeds 100 -o spec3_outputs
+```
+
+Red jets hear Blue radar modes on an RWR (search / lock / support / missile
+active) and defend by aggressiveness band: conservative drags on a lock (dives
+toward the 100 m AGL floor), middle beams on support, aggressive cranks 50° on
+missile active and keeps shooting. After two turn-aways a jet presses (a ≥ 0.5)
+or leaves. Every jet fires shoot-assess-shoot (one missile in flight) or
+shoot-shoot-assess (two at one target, 3 s apart). See
+`docs/specs/03-missile-defense.md`.
+
 ## Tests
 
 ```bash
@@ -117,7 +140,7 @@ explicitly punishes flee-with-0-kills. Sensors (Spec 1): probabilistic radar
 with ±60° field of regard, smooth aspect-dependent F-35 RCS, passive IRST, RWR,
 and per-jet tracks; launches and midcourse support (until ~15 NM) need a
 fire-control quality track. Missiles (Spec 3a) fly a point-mass kinematic model
-and launch inside the table Rmax.
+and launch inside the table Rmax. Red defends against missiles (Spec 3).
 See `docs/design.md` for models and assumptions.
 
 ## Layout
@@ -125,15 +148,17 @@ See `docs/design.md` for models and assumptions.
 ```
 stealth_tactics/
   sim/        # point-mass world, sensors (+ sensor_config, tracks), datalink, fusion,
-              # weapons, missile_kinematics (fly-out), missile_envelope (Rmax table)
-  analysis/   # sensor table, scripted sensor / datalink / missile replays, missile sweep
-  tactics/    # genome + interpreter
+              # weapons, missile_kinematics (fly-out), missile_envelope (Rmax table), rwr
+  analysis/   # sensor table, scripted sensor / datalink / missile / defense replays,
+              # missile sweep, defense stats, Blue test reaction
+  tactics/    # genome + interpreter, maneuvers (primitives), red_defense (state machine)
   ga/         # elitist GA
   acmi/       # ACMI 2.2 exporter
   scenarios/  # YAML/JSON loader
 scenarios/    # default_4v3.yaml, cap_4v2.yaml
 docs/design.md, docs/specs/01-sensors.md, docs/specs/02-track-sharing.md,
-docs/specs/02b-coast-and-lock.md, docs/specs/03a-missile-kinematics.md
+docs/specs/02b-coast-and-lock.md, docs/specs/03a-missile-kinematics.md,
+docs/specs/03-missile-defense.md
 tests/
 ```
 

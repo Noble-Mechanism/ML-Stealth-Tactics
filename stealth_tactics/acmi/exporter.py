@@ -42,11 +42,16 @@ LINK_WEAPON_TYPES = {"link_track", "launch", "launch_remote", "support_handoff",
                      "note",
                      # Spec 3a missile kinematics
                      "burnout", "support_dropped", "defeat_speed", "defeat_opening",
-                     "miss_overshoot"}
+                     "miss_overshoot",
+                     # Spec 3 missile defense
+                     "ground", "rwr_mode", "defend", "threat_cleared", "recommit",
+                     "press", "depart", "blue_defend", "blue_recommit"}
 ALWAYS_BOOKMARK = {"launch", "launch_remote", "support_handoff", "autonomous",
                    "support_lost", "hit", "miss", "timeout", "support_regained",
                    "lost_coast_timeout", "lost_basket", "support_dropped",
-                   "defeat_speed", "defeat_opening", "miss_overshoot"}
+                   "defeat_speed", "defeat_opening", "miss_overshoot",
+                   "ground", "defend", "recommit", "press", "depart",
+                   "blue_defend", "blue_recommit"}
 NM_M = 1852.0
 
 
@@ -65,6 +70,10 @@ class ACMIExporter:
     orientation plus ``Mach=`` and ``TAS=`` (m/s) every frame; kinematic defeats
     (``defeat_speed``, ``defeat_opening``, ``miss_overshoot``) and
     ``support_dropped`` are bookmarks, ``burnout`` a message.
+
+    Spec 3: ``defend`` / ``recommit`` / ``press`` / ``depart`` (and the Blue
+    test reaction's ``blue_defend`` / ``blue_recommit``) and missile ``ground``
+    are bookmarks; ``rwr_mode`` changes and ``threat_cleared`` are messages.
     """
 
     def __init__(

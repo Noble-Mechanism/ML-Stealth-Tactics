@@ -11,6 +11,23 @@ import numpy as np
 from .sensor_config import DEFAULT_SENSOR_CONFIG as _SC, F35_KEY, RED_KEY
 
 
+# Spec 3 (approved change B): flat ground at 0 m MSL (no terrain model yet) and
+# a hard 100 m AGL floor for every aircraft. Missiles that reach the ground are
+# lost (outcome ``ground``, sim/weapons.py).
+GROUND_ALT_M = 0.0
+ALT_FLOOR_AGL_M = 100.0
+
+
+def ground_alt_m(x: float = 0.0, y: float = 0.0) -> float:
+    """Terrain height (m MSL) at (x, y). Flat ground until a terrain model exists."""
+    return GROUND_ALT_M
+
+
+def alt_floor_m(x: float = 0.0, y: float = 0.0) -> float:
+    """Lowest altitude any aircraft may fly at (x, y): ground + 100 m AGL."""
+    return ground_alt_m(x, y) + ALT_FLOOR_AGL_M
+
+
 class AircraftType(str, Enum):
     # TacView-friendly display name. Performance/RCS below are generic LO
     # placeholders labeled F-35 for visualization only — NOT real F-35 data.
@@ -112,6 +129,17 @@ class Aircraft:
     cmd_alt_m: float = 8000.0
     cmd_fire: bool = False
     fire_target: Optional[str] = None
+    # Spec 3: radar emission (always True here; a network output in spec 5).
+    radar_emitting: bool = True
+    # Spec 3: firing doctrine override ("shoot_assess_shoot" |
+    # "shoot_shoot_assess" | "legacy"); None -> SimConfig per-coalition default.
+    firing_doctrine: Optional[str] = None
+    # Spec 3: defensive state for logs / shot table ("hot", "defending", "cold",
+    # "pressing", "departed"); set by the controllers.
+    defense_state: str = "hot"
+    # Spec 3 D9: left the fight for good (never fires; early end when every live
+    # Red jet is departed and no missile is in flight).
+    departed: bool = False
 
     def __post_init__(self) -> None:
         self.ammo = self.params.ammo
@@ -169,9 +197,10 @@ def integrate_aircraft(ac: Aircraft, dt: float) -> None:
 
     # Altitude
     max_climb = p.max_climb_rate_mps * dt
-    target_alt = float(np.clip(ac.cmd_alt_m, p.min_alt_m, p.max_alt_m))
+    floor = max(p.min_alt_m, alt_floor_m(st.x, st.y))   # hard 100 m AGL floor
+    target_alt = float(np.clip(ac.cmd_alt_m, floor, p.max_alt_m))
     st.alt = float(np.clip(st.alt + np.clip(target_alt - st.alt, -max_climb, max_climb),
-                           p.min_alt_m, p.max_alt_m))
+                           floor, p.max_alt_m))
 
     # Position: heading 0 = North (+Y), clockwise toward East (+X)
     st.x += st.speed_mps * np.sin(st.heading_rad) * dt

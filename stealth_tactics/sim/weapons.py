@@ -9,7 +9,8 @@ from typing import Dict, List, Mapping, Optional, Set, Tuple, Union
 
 import numpy as np
 
-from .aircraft import Aircraft, AircraftState, distance_3d, bearing_to, _angle_diff
+from .aircraft import (Aircraft, AircraftState, distance_3d, bearing_to, _angle_diff,
+                       ground_alt_m)
 from .tracks import TrackStore
 from .sensor_config import DEFAULT_SENSOR_CONFIG, SensorConfig, NM_M
 from .missile_kinematics import KinState, advance_one, derived, speed_of_sound
@@ -27,7 +28,7 @@ SUPPORT_OFF_BORESIGHT_DEG = 90.0
 
 # Terminal outcomes (events + ACMI bookmarks use the same labels)
 OUTCOMES = ("hit", "miss", "miss_overshoot", "defeat_speed", "defeat_opening",
-            "timeout", "lost_coast_timeout", "lost_basket", "target_dead")
+            "timeout", "lost_coast_timeout", "lost_basket", "target_dead", "ground")
 
 
 def _vel(st: AircraftState) -> np.ndarray:
@@ -86,6 +87,12 @@ class Missile:
     f_support: float = 1.0
     f_endgame: Optional[float] = None
     pk_final: Optional[float] = None
+    # Spec 3 shot log
+    launch_t: float = 0.0
+    off_nose_deg: float = 0.0            # |launch angle off the shooter's nose|
+    a_pole_m: Optional[float] = None     # shooter-target range when the seeker goes active
+    f_pole_m: Optional[float] = None     # shooter-target range at the end (None: shooter dead)
+    end_t: Optional[float] = None
 
     @property
     def speed_mps(self) -> float:
@@ -127,6 +134,7 @@ class WeaponModel:
         self._missile_seq = 0
         # Weapon events since last drain (World moves them into its event log)
         self.events: List[dict] = []
+        self._by_id: Dict[str, Aircraft] = {}
 
     @property
     def envelope(self):
@@ -198,8 +206,11 @@ class WeaponModel:
             sup_at_active=autonomous,
         )
         m.mach = m.max_mach = kin.mach()
+        m.off_nose_deg = abs(math.degrees(_angle_diff(bearing_to(st, target.state),
+                                                      st.heading_rad)))
         if autonomous:
             m.mach_at_active, m.tof_at_active = m.mach, 0.0
+            m.a_pole_m = rng          # starts active: a-pole recorded at launch
         return m
 
     @staticmethod
@@ -287,6 +298,9 @@ class WeaponModel:
         m.pk *= m.pk_factor
         m.autonomous = True
         m.coasting = False
+        shooter = self._by_id.get(m.shooter_id) if self._by_id else None
+        if shooter is not None and shooter.state.alive:
+            m.a_pole_m = distance_3d(shooter.state, tgt.state)
         rng_nm = self.kcfg.active_range_m / NM_M
         self._event(t, "autonomous", m,
                     f"{m.id} active (within {rng_nm:.0f} NM of {m.target_id}; Mach "
@@ -376,6 +390,7 @@ class WeaponModel:
         """Advance missiles over [t, t+dt] (aircraft are already at t+dt);
         return list of destroyed aircraft ids."""
         tracks = tracks or {}
+        self._by_id = aircraft_by_id
         killed: List[str] = []
         kc = self.kcfg
         kd = self._kd
@@ -392,6 +407,7 @@ class WeaponModel:
             if tgt is None or not tgt.state.alive:
                 m.alive = False
                 m.outcome = m.outcome or "target_dead"
+                self._record_end(m, t)
                 continue
 
             k, ts = m.pos, tgt.state
@@ -400,9 +416,11 @@ class WeaponModel:
             if not m.autonomous:
                 if dist <= kc.active_range_m:
                     if not self._go_autonomous(m, tgt, dist, t):
+                        self._record_end(m, t)
                         continue
                 elif not self._midcourse_support(m, tgt, aircraft_by_id, tracks,
                                                  dist, t, dt):
+                    self._record_end(m, t)
                     continue
             else:
                 self._terminal_support(m, tgt, aircraft_by_id, tracks, dist, t)
@@ -454,6 +472,11 @@ class WeaponModel:
                     self._fuze(m, tgt, t, killed)
                     ended = True
                     break
+                if k.alt <= ground_alt_m(k.x, k.y):
+                    self._end(m, t, "ground", f"{m.id} hit the ground (Mach {m.mach:.2f})",
+                              math.sqrt(rng2))
+                    ended = True
+                    break
                 if not m.autonomous and rng2 <= act2:
                     if not self._go_autonomous(m, tgt, math.sqrt(rng2), t):
                         ended = True
@@ -491,6 +514,7 @@ class WeaponModel:
                     ended = True
                     break
             if ended:
+                self._record_end(m, t)
                 continue
         # target positions at the end of this step = start of the next one
         t_end = t + dt
@@ -498,6 +522,17 @@ class WeaponModel:
             st = ac.state
             self._prev_pos[uid] = (t_end, st.x, st.y, st.alt)
         return killed
+
+    def _record_end(self, m: Missile, t: float) -> None:
+        """Spec 3 shot log: f-pole = shooter-target range when the missile ends
+        (None if the shooter is dead)."""
+        if m.end_t is not None:
+            return
+        m.end_t = t
+        sh = self._by_id.get(m.shooter_id)
+        tg = self._by_id.get(m.target_id)
+        if sh is not None and sh.state.alive and tg is not None:
+            m.f_pole_m = distance_3d(sh.state, tg.state)
 
     def _fuze(self, m: Missile, tgt: Aircraft, t: float, killed: List[str]) -> None:
         kc = self.kcfg

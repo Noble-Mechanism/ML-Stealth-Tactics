@@ -13,6 +13,14 @@ from .sensor_config import SensorConfig, DEFAULT_SENSOR_CONFIG
 from .tracks import TrackStore
 from .datalink import Datalink
 from .weapons import WeaponModel, Missile
+from .rwr import RwrModel, RwrCue
+
+# Spec 3 firing doctrines (approved change C), per jet, both sides.
+SHOOT_ASSESS_SHOOT = "shoot_assess_shoot"   # max 1 own missile in flight
+SHOOT_SHOOT_ASSESS = "shoot_shoot_assess"   # 2 at the same target 3 s apart, then
+                                            # nothing at anyone until both resolve
+LEGACY = "legacy"                           # pre-spec-3: fire whenever gates allow
+DOCTRINES = (SHOOT_ASSESS_SHOOT, SHOOT_SHOOT_ASSESS, LEGACY)
 
 
 @dataclass
@@ -22,6 +30,14 @@ class SimConfig:
     seed: int = 42
     # None => sensor_config.DEFAULT_SENSOR_CONFIG
     sensor_config: Optional[SensorConfig] = None
+    # Spec 3 firing doctrine per coalition (Aircraft.firing_doctrine overrides
+    # per jet). Red default shoot_assess_shoot (spec 4 randomizes); Blue is a
+    # setting (spec 5 may make it a network output). "legacy" = old behaviour.
+    blue_doctrine: str = SHOOT_ASSESS_SHOOT
+    red_doctrine: str = SHOOT_ASSESS_SHOOT
+    ssa_interval_s: float = 3.0
+    # D9: end once every live Red jet has departed and no missile is in flight
+    early_end_on_departure: bool = True
 
 
 @dataclass
@@ -39,6 +55,12 @@ class SimResult:
     sensor_events: List[dict] = field(default_factory=list)
     # Snapshot history for ACMI: list of (t, states dict)
     frames: List[dict] = field(default_factory=list)
+    # Spec 3: one entry per missile (shooter, target, launch t / range, off-nose,
+    # a-pole, f-pole, outcome, Mach at end, Pk, target defense state at launch
+    # and at the end)
+    shots: List[dict] = field(default_factory=list)
+    red_shots: int = 0
+    ended_early: bool = False
 
 
 def _rng(a: Aircraft, b: Aircraft) -> float:
@@ -83,7 +105,17 @@ class World:
         self.tracks: Dict[str, TrackStore] = self.sensors.stores
         self.sensor_events: List[dict] = []
         self.blue_shots = 0
+        self.red_shots = 0
         self._missile_end_recorded: set = set()
+        # Spec 3 RWR modes (own RNG stream so spec 1-3a draws do not shift)
+        self.rwr_model = RwrModel(
+            np.random.default_rng([config.seed, cfg.rwr.mode_rng_salt]), cfg)
+        self.rwr: Dict[str, List[RwrCue]] = self.rwr_model.cues
+        self.rwr_events: List[dict] = []
+        # Spec 3 shoot-shoot-assess salvo per jet: (target, t_first, first missile id)
+        self._salvo: Dict[str, tuple] = {}
+        self._shot_info: Dict[str, dict] = {}
+        self.ended_early = False
 
     def get(self, uid: str) -> Optional[Aircraft]:
         return self._by_id.get(uid)
@@ -100,8 +132,12 @@ class World:
         while self.time_s < self.config.max_time_s:
             if not self.alive(Coalition.BLUE) or not self.alive(Coalition.RED):
                 break
+            if self.config.early_end_on_departure and self._all_red_departed():
+                self.ended_early = True
+                break
 
             self._update_sensors()
+            self._update_rwr()
 
             # Controllers set cmd_* and cmd_fire
             self.blue_controller(self)
@@ -109,16 +145,21 @@ class World:
 
             # Process fire commands
             for ac in self.aircraft:
-                if ac.cmd_fire and ac.fire_target and ac.state.alive:
-                    tgt = self._by_id.get(ac.fire_target)
+                if ac.cmd_fire and ac.fire_target and ac.state.alive and not ac.departed:
+                    tgt_id = self._doctrine_target(ac, ac.fire_target)
+                    tgt = self._by_id.get(tgt_id) if tgt_id else None
                     fc_src = self.fire_control_source(ac, tgt.id) if tgt else None
                     if tgt and fc_src is not None:
                         remote = None if fc_src == ac.id else fc_src
                         m = self.weapons.launch(ac, tgt, remote_source=remote)
                         if m:
                             self.missiles.append(m)
+                            m.launch_t = self.time_s
+                            self._after_launch(ac, tgt, m)
                             if ac.coalition == Coalition.BLUE:
                                 self.blue_shots += 1
+                            else:
+                                self.red_shots += 1
                             self.events.append({
                                 "t": self.time_s,
                                 "type": "launch",
@@ -157,11 +198,97 @@ class World:
             self.weapons.events = []
             for kid in killed:
                 self.events.append({"t": self.time_s, "type": "kill", "target": kid})
+            for m in self.missiles:
+                info = self._shot_info.get(m.id)
+                if info is not None and m.end_t is not None and "target_state_end" not in info:
+                    tg = self._by_id.get(m.target_id)
+                    info["target_state_end"] = tg.defense_state if tg else None
 
             self.time_s += dt
             self._record_frame()
 
         return self._make_result()
+
+    # ------------------------------------------------------------ spec 3 --
+    def doctrine_of(self, ac: Aircraft) -> str:
+        if ac.firing_doctrine:
+            return ac.firing_doctrine
+        return (self.config.blue_doctrine if ac.coalition == Coalition.BLUE
+                else self.config.red_doctrine)
+
+    def own_missiles_in_flight(self, ac: Aircraft) -> List[Missile]:
+        return [m for m in self.missiles if m.alive and m.shooter_id == ac.id]
+
+    def _doctrine_target(self, ac: Aircraft, requested: str) -> Optional[str]:
+        """Target the doctrine allows *ac* to fire at now (None = hold fire).
+        shoot_shoot_assess redirects the second shot to the salvo target."""
+        doc = self.doctrine_of(ac)
+        if doc == LEGACY:
+            return requested
+        live = self.own_missiles_in_flight(ac)
+        if doc == SHOOT_ASSESS_SHOOT:
+            return None if live else requested
+        if doc == SHOOT_SHOOT_ASSESS:
+            salvo = self._salvo.get(ac.id)
+            if salvo is not None:
+                tgt_id, t1, mid1 = salvo
+                first_alive = any(m.id == mid1 for m in live)
+                tgt = self._by_id.get(tgt_id)
+                if (first_alive and tgt is not None and tgt.state.alive
+                        and self.time_s >= t1 + self.config.ssa_interval_s - 1e-9):
+                    return tgt_id
+                if first_alive or live:
+                    return None
+                self._salvo.pop(ac.id, None)    # salvo lapsed (first resolved early)
+            return None if live else requested
+        raise ValueError(f"unknown firing doctrine {doc!r}")
+
+    def _after_launch(self, ac: Aircraft, tgt: Aircraft, m: Missile) -> None:
+        if self.doctrine_of(ac) == SHOOT_SHOOT_ASSESS:
+            salvo = self._salvo.get(ac.id)
+            if salvo is None:
+                self._salvo[ac.id] = (tgt.id, self.time_s, m.id)
+            else:
+                self._salvo[ac.id] = (salvo[0], salvo[1], "")  # closed: both fired
+        self._shot_info[m.id] = {"target_state_launch": tgt.defense_state}
+
+    def _all_red_departed(self) -> bool:
+        reds = self.alive(Coalition.RED)
+        return (bool(reds) and all(r.departed for r in reds)
+                and not any(m.alive for m in self.missiles))
+
+    def log_event(self, ev: dict) -> None:
+        """Controller events (defend / recommit / press / depart ...): event
+        log + this frame's ACMI events."""
+        self.events.append(ev)
+        self._frame_event(ev)
+
+    def _update_rwr(self) -> None:
+        evts = self.rwr_model.update(self.aircraft, self.missiles, self.tracks, self.time_s)
+        self.rwr = self.rwr_model.cues
+        if evts:
+            self.rwr_events.extend(evts)
+            if self.record and self.frames and abs(self.frames[-1]["t"] - self.time_s) < 1e-9:
+                self.frames[-1].setdefault("events", []).extend(evts)
+
+    def _shots_table(self) -> List[dict]:
+        out = []
+        for m in self.missiles:
+            tgt = self._by_id.get(m.target_id)
+            info = self._shot_info.get(m.id, {})
+            out.append({
+                "missile": m.id, "shooter": m.shooter_id, "target": m.target_id,
+                "coalition": m.coalition, "launch_t": m.launch_t,
+                "launch_range_m": m.launch_range_m, "off_nose_deg": m.off_nose_deg,
+                "a_pole_m": m.a_pole_m, "f_pole_m": m.f_pole_m,
+                "outcome": m.outcome if not m.alive else "in_flight",
+                "mach_end": m.mach_end, "pk": m.pk_final,
+                "target_state_launch": info.get("target_state_launch"),
+                "target_state_end": info.get("target_state_end",
+                                             tgt.defense_state if tgt is not None else None),
+                "end_t": m.end_t,
+            })
+        return out
 
     def fire_control_source(self, ac: Aircraft, target_id: str) -> Optional[str]:
         """Who provides fire-control quality on target for a launch by *ac*:
@@ -269,4 +396,7 @@ class World:
             events=self.events,
             sensor_events=self.sensor_events,
             frames=self.frames,
+            shots=self._shots_table(),
+            red_shots=self.red_shots,
+            ended_early=self.ended_early,
         )

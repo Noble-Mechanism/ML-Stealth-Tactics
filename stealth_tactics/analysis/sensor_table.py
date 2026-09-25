@@ -144,3 +144,44 @@ def format_table(rows: List[Row], seeds: int) -> str:
         "IRST tracks are passive and can never support a missile shot.",
     ]
     return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------ spec 3 change A (RCS) ----
+OLD_F35_TABLE = ((0.0, 0.05), (30.0, 0.10), (60.0, 0.45), (90.0, 0.90), (135.0, 0.55),
+                 (180.0, 0.30))
+
+
+def red_vs_f35_aspect_table(aspects=(0, 10, 20, 30, 35, 40, 45, 50, 60, 70, 80, 90, 135, 180),
+                            seeds: int = 200) -> str:
+    """Red radar vs F-35 by aspect, old (pre-spec-3) vs current RCS table:
+    RCS factor, R50, FC range (0.7 R50) and empirical median first detection."""
+    import dataclasses
+    from stealth_tactics.sim.sensor_config import SignatureConfig, F35_KEY
+    from stealth_tactics.sim.sensors import cosine_interp
+    new_cfg = DEFAULT_SENSOR_CONFIG
+    old_cfg = dataclasses.replace(new_cfg, signature=SignatureConfig(
+        tables={F35_KEY: OLD_F35_TABLE}))
+    ref = new_cfg.radar.ref_range_m["RedFighter"]
+    L = ["Red radar vs F-35 by aspect: old table (0/30/60/90/135/180 deg -> "
+         ".05/.10/.45/.90/.55/.30) vs spec 3 table (0/20/45/70/90/135/180 -> "
+         ".05/.05/.12/.50/.90/.55/.30).",
+         f"R50 = 70 km x rcs^0.25; FC = 0.7 x R50; first detect = median over {seeds} "
+         "closing runs (500 m/s closure, sensor_table geometry).", "",
+         f"{'aspect':>6} | {'rcs old':>7} {'rcs new':>7} | {'R50 old':>7} {'R50 new':>7} NM | "
+         f"{'FC old':>6} {'FC new':>6} NM | {'1st det old':>11} {'new':>6} NM | "
+         f"{'ratio new/nose':>14}"]
+    nose = ref * 0.05 ** 0.25
+    for a in aspects:
+        ro = cosine_interp(OLD_F35_TABLE, a)
+        rn = cosine_interp(new_cfg.signature.tables[F35_KEY], a)
+        r50o, r50n = ref * ro ** 0.25, ref * rn ** 0.25
+        hdg = math.pi - math.radians(a)
+        meds = []
+        for cfg in (old_cfg, new_cfg):
+            ASPECT_HEADING[f"_a{a}"] = hdg
+            v = empirical_first_detect("red", f"_a{a}", "radar", 1.6 * ref, seeds, cfg)
+            meds.append(float(np.median(v)) / NM_M)
+        L.append(f"{a:6.0f} | {ro:7.3f} {rn:7.3f} | {r50o / NM_M:7.1f} {r50n / NM_M:7.1f}    | "
+                 f"{0.7 * r50o / NM_M:6.1f} {0.7 * r50n / NM_M:6.1f}    | {meds[0]:11.1f} "
+                 f"{meds[1]:6.1f}    | {r50n / nose:14.2f}")
+    return "\n".join(L) + "\n"

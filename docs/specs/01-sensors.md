@@ -59,9 +59,18 @@ F-35: azimuth-aspect table, **piecewise-cosine interpolation**
 (`y = y0 + (y1−y0)·(1−cos(πu))/2`, u = fractional position in the segment ⇒
 C¹-smooth, monotone per segment, zero slope at each knot):
 
-| aspect | 0° | 30° | 60° | 90° | 135° | 180° |
-|---|---|---|---|---|---|---|
-| rcs_factor | 0.05 | 0.10 | 0.45 | 0.90 | 0.55 | 0.30 |
+| aspect | 0° | 20° | 45° | 70° | 90° | 135° | 180° |
+|---|---|---|---|---|---|---|---|
+| rcs_factor | 0.05 | 0.05 | 0.12 | 0.50 | 0.90 | 0.55 | 0.30 |
+
+**Changed in spec 3 (approved change A).** The original table was 0/30/60/90/135/180°
+→ 0.05/0.10/0.45/0.90/0.55/0.30. The new knots give a flat best RCS within 20° of the
+nose, a modest penalty for a 35–45° crank (Red detection range ×1.18 at 35°, ×1.24 at
+45° vs nose-on) and a steep rise to the beam; 90° and aft are unchanged. Red-radar
+median first detection of a closing F-35: 20° 28.9 → 24.6 NM, 35° 31.7 → 29.4 NM,
+45° 38.8 → 32.1 NM, 50° 42.2 → 33.3 NM, 60° 45.0 → 42.3 NM (nose 25.0 NM unchanged).
+The spec 1 slope test bound moved from 0.03 to 0.035 per degree (the 70–90° segment
+peaks at 0.031/deg). Full table: `spec3_outputs/rcs_change/rcs_aspect_table.txt`.
 
 Red: isotropic 1.0. Resulting Red-radar R50 vs F-35: nose 33.1 km, beam
 68.2 km, tail 51.8 km. F-35 radar vs Red: 90 km all aspects.

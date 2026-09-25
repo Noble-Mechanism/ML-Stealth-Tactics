@@ -20,6 +20,12 @@ class Scenario:
     blue: List[Dict[str, Any]] = field(default_factory=list)
     red: List[Dict[str, Any]] = field(default_factory=list)
     raw: Dict[str, Any] = field(default_factory=dict)
+    # Spec 3: Red flight aggressiveness a in [0, 1] (spec 4 will draw it) and the
+    # defense switch; firing doctrines per coalition (None -> SimConfig default)
+    red_aggressiveness: float = 0.5
+    red_defense: bool = True
+    blue_doctrine: Optional[str] = None
+    red_doctrine: Optional[str] = None
 
 
 def load_scenario(path: Path | str) -> Scenario:
@@ -36,6 +42,10 @@ def load_scenario(path: Path | str) -> Scenario:
         blue=list(data.get("blue", [])),
         red=list(data.get("red", [])),
         raw=data,
+        red_aggressiveness=float(data.get("red_aggressiveness", 0.5)),
+        red_defense=bool(data.get("red_defense", True)),
+        blue_doctrine=data.get("blue_doctrine"),
+        red_doctrine=data.get("red_doctrine"),
     )
 
 

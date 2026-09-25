@@ -13,6 +13,9 @@ ACMI 2.2 for visual playback.
 - State per aircraft: `x, y, alt, heading, speed, alive`.
 - Heading convention: **0 = North**, increasing **clockwise** (aviation/TacView yaw).
 - Limits: max turn rate (°/s), climb rate (m/s), speed band, altitude band.
+- **Ground (Spec 3):** flat ground at 0 m (`aircraft.GROUND_ALT_M`); hard
+  **100 m AGL floor** for every aircraft (`ALT_FLOOR_AGL_M`, enforced in
+  `integrate_aircraft`). A missile that reaches the ground ends with outcome `ground`.
 - Time step default **0.5 s** — coarse enough for hundreds of evals/generation on a laptop; no game engine.
 
 ## Sensors (Spec 1 — see `docs/specs/01-sensors.md`)
@@ -23,8 +26,9 @@ All sensor numbers (unclassified placeholders) live in
 - **Radar** (1 Hz): per-scan `Pd = 1/(1+(R/R50)^8.69)`,
   `R50 = ref_range × rcs_eff^0.25` (F-35 90 km, Red 70 km), ±60° az/el field of
   regard, seeded RNG.
-- **Signature:** F-35 smooth azimuth-aspect table (nose 0.05, 30° 0.10, 60° 0.45,
-  beam 0.90, 135° 0.55, tail 0.30; piecewise-cosine); Red isotropic 1.0.
+- **Signature:** F-35 smooth azimuth-aspect table (Spec 3 change A: nose 0.05,
+  20° 0.05, 45° 0.12, 70° 0.50, beam 0.90, 135° 0.55, tail 0.30; piecewise-cosine);
+  Red isotropic 1.0. Red detection range vs nose-on: ×1.18 at 35°, ×1.24 at 45°.
 - **IRST** (1 Hz, passive): R50 nose→tail (Red 30→60 km, F-35 25→50 km) × speed
   factor; bearing σ 0.5°, range error σ 30 %; never fire-control.
 - **RWR** (every step): bearing-only when inside an enemy radar's FOR and within
@@ -119,6 +123,34 @@ sourced missile data.
   removed (`-id`) at the end of its flight; defeats and `support_dropped` are
   bookmarks, `burnout` a message.
 
+## Missile defense and firing doctrine (Spec 3 — see `docs/specs/03-missile-defense.md`)
+
+- **RWR modes** (`sim/rwr.py`, own RNG stream salt 0x3D3F, after sensors each
+  step): per receiver and enemy emitter the highest of search < lock < support,
+  plus a per-missile `missile_active` cue for the targeted jet only. Deterministic
+  spec 1 range gates (F-35 LPI 29 NM, Red radar 57 NM), ±60° emitter FOR, perfect
+  mode ID, 5° bearing noise, per-mode range factors. `world.rwr[id]` → `RwrCue`s.
+  Both sides get them. Only `radar_emitting` jets are seen (always on until spec 5).
+- **Maneuver primitives** (`tactics/maneuvers.py`, spec 4 hook): `hot`, `crank`
+  (50°), `beam` (90°, max speed, hold altitude), `drag` (threat on tail, max speed,
+  descend `depth(a) = (1−a)(alt − floor) + a × 1000 m`, never below 100 m AGL),
+  `depart`.
+- **Red defense** (`tactics/red_defense.py`, `DefenseConfig`), per jet, one
+  aggressiveness `a` per flight (scenario `red_aggressiveness`, default 0.5):
+  a < 1/3 lock → drag; 1/3–2/3 support → beam; ≥ 2/3 missile active → crank
+  (keeps firing and supporting). Threat cleared after 2 s without a qualifying cue
+  and the TOF estimate (range / 700 m/s) run out; cold `5 + 35(1−a)` s; turn-away
+  limit 2 (cranks count), then press (a ≥ 0.5) or depart. The fight ends early
+  when all live Red have departed and nothing is in flight.
+- **Firing doctrine** per jet (`SimConfig.blue_doctrine` / `red_doctrine`,
+  `Aircraft.firing_doctrine` override): `shoot_assess_shoot` (default; max 1 own
+  missile in flight) or `shoot_shoot_assess` (2 at one target 3 s apart, then hold
+  until both resolve). `legacy` (ripple everything) is kept for regression.
+- **Shot log:** `SimResult.shots` / `red_shots` with launch range, off-nose,
+  a-pole, f-pole, outcome, Mach, Pk, target defense state at launch and end.
+- Blue scripted test reaction (`analysis/blue_test_defense.py`) is for tests and
+  replays only; the GA does not use it.
+
 ## Tactics genome (high-level)
 
 Not stick-and-throttle traces. Genes encode:
@@ -182,6 +214,7 @@ Weights live on `GAConfig` (`stealth_tactics/ga/evolution.py`).
 - Destroyed objects emitted as `-id`.
 - Spec 2: `frame["markers"]` → marker objects (e.g. `TRI est` Navaid/Waypoint). Link, launch-on-remote, support-handoff, autonomous and hit/miss events are exported as Bookmarks/Messages.
 - Spec 3a: missile objects `T=lon|lat|alt|0|pitch|yaw,Mach=…,TAS=…`; kinematic defeat labels as Bookmarks.
+- Spec 3: `rwr_mode` messages; `defend`, `recommit`, `press`, `depart`, `blue_defend`, `blue_recommit` and `ground` bookmarks.
 - ENU → lon/lat via small-angle offset from a fixed reference (35°N, 115°W).
 
 ## GA champion capture

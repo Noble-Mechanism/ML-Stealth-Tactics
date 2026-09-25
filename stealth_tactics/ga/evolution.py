@@ -10,9 +10,10 @@ from pathlib import Path
 import numpy as np
 
 from stealth_tactics.tactics.genome import TacticsGenome, crossover, mutate
-from stealth_tactics.sim.world import World, SimConfig, SimResult
+from stealth_tactics.sim.world import World, SimConfig, SimResult, SHOOT_ASSESS_SHOOT
 from stealth_tactics.sim.aircraft import Coalition
 from stealth_tactics.tactics.interpreter import TacticsController, RedCAPController
+from stealth_tactics.tactics.red_defense import RedDefense, DefenseConfig
 from stealth_tactics.scenarios.loader import Scenario, build_aircraft
 
 
@@ -36,6 +37,14 @@ class GAConfig:
     w_red_win: float = -40.0
     w_coward: float = -50.0  # flat penalty for 0 kills
     w_no_shots: float = -30.0  # extra if also took no shots
+    # Spec 3 (None -> scenario value -> default): Red defense on/off, Red
+    # aggressiveness, firing doctrines ("shoot_assess_shoot" |
+    # "shoot_shoot_assess" | "legacy")
+    red_defense: Optional[bool] = None
+    red_aggressiveness: Optional[float] = None
+    blue_doctrine: Optional[str] = None
+    red_doctrine: Optional[str] = None
+    defense_config: Optional[DefenseConfig] = None
 
 
 @dataclass
@@ -67,13 +76,19 @@ class GeneticAlgorithm:
         blue_ids = [a.id for a in aircraft if a.coalition == Coalition.BLUE]
         red_ids = [a.id for a in aircraft if a.coalition == Coalition.RED]
 
+        c, sc = self.config, self.scenario
         blue_ctrl = TacticsController(genome, blue_ids)
-        red_ctrl = RedCAPController(red_ids, mode=self.scenario.red_mode)
+        defense_on = c.red_defense if c.red_defense is not None else sc.red_defense
+        a = c.red_aggressiveness if c.red_aggressiveness is not None else sc.red_aggressiveness
+        defense = RedDefense(a, c.defense_config) if defense_on else None
+        red_ctrl = RedCAPController(red_ids, mode=sc.red_mode, defense=defense)
 
         sim_cfg = SimConfig(
             dt=self.config.sim_dt,
             max_time_s=self.config.sim_max_time_s,
             seed=self.config.seed + 1000 + seed_offset,
+            blue_doctrine=c.blue_doctrine or sc.blue_doctrine or SHOOT_ASSESS_SHOOT,
+            red_doctrine=c.red_doctrine or sc.red_doctrine or SHOOT_ASSESS_SHOOT,
         )
         world = World(aircraft, sim_cfg, blue_ctrl, red_ctrl, record=record)
         result = world.run()
