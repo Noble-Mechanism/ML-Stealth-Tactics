@@ -29,7 +29,7 @@ from stealth_tactics.sim.sensor_config import NM_M
 from stealth_tactics.sim.sensors import distance_3d
 from stealth_tactics.sim.weapons import OUTCOMES
 from stealth_tactics.sim.world import (SimConfig, World, SHOOT_ASSESS_SHOOT,
-                                       SHOOT_SHOOT_ASSESS)
+                                       SHOOT_SHOOT_ASSESS, LEGACY)
 from stealth_tactics.tactics.interpreter import RedCAPController
 from stealth_tactics.tactics.red_defense import RedDefense
 from .blue_test_defense import BlueTestDefense  # noqa: F401  (re-export)
@@ -41,7 +41,7 @@ KINDS = {
     "D1": "turn-away limit: two cycles, then a=0.8 presses",
     "D2": "turn-away limit: two cycles, then a=0.2 departs",
     "E": "Blue scripted test reaction vs a Red shot (crank while supporting, then drag)",
-    "F": "Blue shoot-shoot-assess: 2 missiles 3 s apart, then hold until both resolve",
+    "F": "Blue shoot-shoot-assess (per contact): pair at R1, then a pair at R2 at once",
 }
 # Default seeds (chosen so each replay shows its behaviour; the Red / Blue Pk
 # rolls decide who survives long enough -- see describe()).
@@ -89,11 +89,19 @@ class BlueShooter:
                     continue
                 if w.time_s < max(m.end_t or 0.0 for m in own) + self.refire_delay_s:
                     continue
-            d = distance_3d(ac.state, tgt.state)
-            lim = (self.fire_nm * NM_M if self.fire_nm is not None
-                   else self.shot_frac * w.weapons.rmax_m(ac, tgt))
-            if d <= lim and w.fire_control_source(ac, tgt.id) is not None:
-                ac.cmd_fire, ac.fire_target = True, tgt.id
+            cands = [tgt]
+            if (w.doctrine_of(ac) != LEGACY
+                    and not w.may_fire_at(ac, tgt.id)):
+                # per-contact doctrine: nearest contact busy -> next nearest
+                cands = [r for r in sorted(reds, key=lambda r: distance_3d(ac.state, r.state))
+                         if r.id != tgt.id and w.may_fire_at(ac, r.id)]
+            for c in cands:
+                d = distance_3d(ac.state, c.state)
+                lim = (self.fire_nm * NM_M if self.fire_nm is not None
+                       else self.shot_frac * w.weapons.rmax_m(ac, c))
+                if d <= lim and w.fire_control_source(ac, c.id) is not None:
+                    ac.cmd_fire, ac.fire_target = True, c.id
+                    break
 
 
 @dataclass
@@ -169,12 +177,12 @@ def run_defense_replay(kind: str, seed: int = 1, record: bool = True,
                               ac.state.speed_mps, ac.defense_state, ac.state.alive)
             row["range_nm"] = {r.id: distance_3d(b1.state, r.state) / NM_M for r in reds}
             samples.append(row)
-    hold = {"s": 0.0, "first": None, "last": None}
+    valid_t: Dict[str, List[float]] = {}
 
     def hook_f(world: World, frame: dict) -> None:
         hook(world, frame)
-        # F: seconds B1 could have shot another Red (own FC, <= 0.85 x Rmax,
-        # <= 60 deg off the nose) while it held fire waiting for its salvo
+        # F: times B1 had a valid shot (own FC, <= 0.85 x Rmax, launch gates) on
+        # a Red it had no missile at, while other own missiles were in flight
         live = [m for m in world.missiles if m.alive and m.shooter_id == "B1"]
         if not live or not b1.state.alive:
             return
@@ -185,19 +193,30 @@ def run_defense_replay(kind: str, seed: int = 1, record: bool = True,
             if (world.fire_control_source(b1, r.id) is not None
                     and distance_3d(b1.state, r.state) <= 0.85 * world.weapons.rmax_m(b1, r)
                     and world.weapons.can_shoot(b1, r)):
-                hold["s"] += world.config.dt
-                hold["first"] = hold["first"] if hold["first"] is not None else world.time_s
-                hold["last"] = world.time_s
-                break
+                valid_t.setdefault(r.id, []).append(world.time_s)
     w.frame_hook = hook_f if kind == "F" else hook
     res = w.run()
     rep = DefenseReplay(kind, seed, w, res, samples)
     if kind == "F":
-        rep.notes.append(
-            f"  held fire by doctrine: B1 had a valid shot (own FC, <= 0.85 x Rmax, <= 60 deg "
-            f"off) on another Red for {hold['s']:.1f} s while its salvo was in flight"
-            + (f" (t={hold['first']:.1f}-{hold['last']:.1f} s)" if hold["first"] is not None
-               else ""))
+        launches = [e for e in res.events if e["type"] == "launch" and e["shooter"] == "B1"]
+        for rid, ts in sorted(valid_t.items()):
+            first_launch = min((e["t"] for e in launches if e["target"] == rid), default=None)
+            held = [t for t in ts if first_launch is None or t < first_launch]
+            if first_launch is None:
+                rep.notes.append(f"  {rid}: valid shot from t={ts[0]:.1f} s while other missiles "
+                                 f"were in flight, never fired at")
+            else:
+                rep.notes.append(
+                    f"  {rid}: first valid shot while other missiles in flight t={ts[0]:.1f} s, "
+                    f"first launch at it t={first_launch:.1f} s (held {len(held) * world_dt(w):.1f} s"
+                    f" by doctrine = rest of the open pair at the other contact)")
+    return rep
+
+
+def world_dt(w: World) -> float:
+    return w.config.dt
+
+
     return rep
 
 

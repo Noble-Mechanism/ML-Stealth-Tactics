@@ -143,9 +143,13 @@ sourced missile data.
   limit 2 (cranks count), then press (a ≥ 0.5) or depart. The fight ends early
   when all live Red have departed and nothing is in flight.
 - **Firing doctrine** per jet (`SimConfig.blue_doctrine` / `red_doctrine`,
-  `Aircraft.firing_doctrine` override): `shoot_assess_shoot` (default; max 1 own
-  missile in flight) or `shoot_shoot_assess` (2 at one target 3 s apart, then hold
-  until both resolve). `legacy` (ripple everything) is kept for regression.
+  `Aircraft.firing_doctrine` override), both **per contact**:
+  `shoot_assess_shoot` (default; max 1 own missile in flight per target, several
+  contacts at once) or `shoot_shoot_assess` (2 at one target 3 s apart, then
+  nothing more at that target until both resolve; other targets at once). The
+  network decides when and how many shots; doctrine only limits per contact.
+  Controllers fall back to the next-nearest enemy when their target is blocked.
+  `legacy` (ripple everything) is kept for regression.
 - **Shot log:** `SimResult.shots` / `red_shots` with launch range, off-nose,
   a-pole, f-pole, outcome, Mach, Pk, target defense state at launch and end.
 - Blue scripted test reaction (`analysis/blue_test_defense.py`) is for tests and

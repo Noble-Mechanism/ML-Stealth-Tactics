@@ -16,9 +16,10 @@ from .weapons import WeaponModel, Missile
 from .rwr import RwrModel, RwrCue
 
 # Spec 3 firing doctrines (approved change C), per jet, both sides.
-SHOOT_ASSESS_SHOOT = "shoot_assess_shoot"   # max 1 own missile in flight
+SHOOT_ASSESS_SHOOT = "shoot_assess_shoot"   # max 1 own missile in flight per target
 SHOOT_SHOOT_ASSESS = "shoot_shoot_assess"   # 2 at the same target 3 s apart, then
-                                            # nothing at anyone until both resolve
+                                            # nothing more at THAT target until both
+                                            # resolve (other targets: new pair at once)
 LEGACY = "legacy"                           # pre-spec-3: fire whenever gates allow
 DOCTRINES = (SHOOT_ASSESS_SHOOT, SHOOT_SHOOT_ASSESS, LEGACY)
 
@@ -112,7 +113,8 @@ class World:
             np.random.default_rng([config.seed, cfg.rwr.mode_rng_salt]), cfg)
         self.rwr: Dict[str, List[RwrCue]] = self.rwr_model.cues
         self.rwr_events: List[dict] = []
-        # Spec 3 shoot-shoot-assess salvo per jet: (target, t_first, first missile id)
+        # Spec 3 shoot-shoot-assess open pair per jet (only the first shot fired):
+        # (target, t_first, first missile id)
         self._salvo: Dict[str, tuple] = {}
         self._shot_info: Dict[str, dict] = {}
         self.ended_early = False
@@ -221,27 +223,43 @@ class World:
 
     def _doctrine_target(self, ac: Aircraft, requested: str) -> Optional[str]:
         """Target the doctrine allows *ac* to fire at now (None = hold fire).
-        shoot_shoot_assess redirects the second shot to the salvo target."""
+
+        Both doctrines are per contact (the network decides when and how many
+        shots come off; doctrine only limits missiles per contact).
+        shoot_assess_shoot: at most one own missile in flight per target.
+        shoot_shoot_assess (per contact): a pair at one target, the second shot
+        ``ssa_interval_s`` after the first (a due second shot is redirected to
+        the pair's target). While the pair is open (second not yet fired, first
+        still flying) the jet fires at nothing else. After that, a target is
+        blocked only while one of the jet's own missiles aimed at it is still
+        in flight; other targets can be engaged with a new pair at once."""
         doc = self.doctrine_of(ac)
         if doc == LEGACY:
             return requested
         live = self.own_missiles_in_flight(ac)
         if doc == SHOOT_ASSESS_SHOOT:
-            return None if live else requested
+            # per contact: at most one own missile in flight at this target
+            return None if any(m.target_id == requested for m in live) else requested
         if doc == SHOOT_SHOOT_ASSESS:
             salvo = self._salvo.get(ac.id)
             if salvo is not None:
                 tgt_id, t1, mid1 = salvo
                 first_alive = any(m.id == mid1 for m in live)
                 tgt = self._by_id.get(tgt_id)
-                if (first_alive and tgt is not None and tgt.state.alive
-                        and self.time_s >= t1 + self.config.ssa_interval_s - 1e-9):
-                    return tgt_id
-                if first_alive or live:
-                    return None
-                self._salvo.pop(ac.id, None)    # salvo lapsed (first resolved early)
-            return None if live else requested
+                if first_alive and tgt is not None and tgt.state.alive:
+                    if self.time_s >= t1 + self.config.ssa_interval_s - 1e-9:
+                        return tgt_id          # second shot of the open pair
+                    return None                # pair open: wait for shot 2
+                self._salvo.pop(ac.id, None)   # pair lapsed (first resolved early)
+            if any(m.target_id == requested for m in live):
+                return None                    # this contact still has a pair out
+            return requested
         raise ValueError(f"unknown firing doctrine {doc!r}")
+
+    def may_fire_at(self, ac: Aircraft, tgt_id: str) -> bool:
+        """True if the firing doctrine lets *ac* launch at *tgt_id* this step
+        (launch gates such as FC, range and ammo are checked separately)."""
+        return self._doctrine_target(ac, tgt_id) == tgt_id
 
     def _after_launch(self, ac: Aircraft, tgt: Aircraft, m: Missile) -> None:
         if self.doctrine_of(ac) == SHOOT_SHOOT_ASSESS:
@@ -249,7 +267,7 @@ class World:
             if salvo is None:
                 self._salvo[ac.id] = (tgt.id, self.time_s, m.id)
             else:
-                self._salvo[ac.id] = (salvo[0], salvo[1], "")  # closed: both fired
+                self._salvo.pop(ac.id, None)   # pair complete: per-contact block now
         self._shot_info[m.id] = {"target_state_launch": tgt.defense_state}
 
     def _all_red_departed(self) -> bool:

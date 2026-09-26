@@ -15,7 +15,7 @@ from stealth_tactics.sim.aircraft import (
     _angle_diff,
     _wrap_pi,
 )
-from stealth_tactics.sim.world import World
+from stealth_tactics.sim.world import World, LEGACY
 from stealth_tactics.sim.tracks import TrackQuality
 from .genome import (
     TacticsGenome,
@@ -181,7 +181,18 @@ class TacticsController:
                 ac.cmd_alt_m = tgt.state.alt + g.commit_alt_bias_m
 
             # Weapons
-            self._maybe_fire(ac, tgt, dist, world)
+            if (world.doctrine_of(ac) != LEGACY
+                    and not world.may_fire_at(ac, tgt.id)):
+                # Spec 3 per-contact doctrine: this contact already has missiles out; engage
+                # another Red (nearest first) that passes the same gates.
+                for alt in sorted((r for r in world.alive(Coalition.RED) if r.id != tgt.id),
+                                  key=lambda r: distance_3d(ac.state, r.state)):
+                    if world.may_fire_at(ac, alt.id):
+                        self._maybe_fire(ac, alt, distance_3d(ac.state, alt.state), world)
+                        if ac.cmd_fire:
+                            break
+            else:
+                self._maybe_fire(ac, tgt, dist, world)
 
     def _maybe_fire(
         self,
@@ -277,6 +288,23 @@ class RedCAPController:
 
     @staticmethod
     def _maybe_fire(world: World, ac: Aircraft, tgt: Aircraft, detected: bool) -> None:
+        if (world.doctrine_of(ac) != LEGACY
+                and not world.may_fire_at(ac, tgt.id)):
+            # Spec 3 per-contact doctrine: the nearest Blue already has missiles out; engage
+            # another Blue (nearest first) that passes the same gates.
+            store = world.tracks.get(ac.id)
+            for alt in sorted((b for b in world.alive(Coalition.BLUE) if b.id != tgt.id),
+                              key=lambda b: distance_3d(ac.state, b.state)):
+                if world.may_fire_at(ac, alt.id):
+                    RedCAPController._fire_gates(
+                        world, ac, alt, store is not None and alt.id in store)
+                    if ac.cmd_fire:
+                        return
+            return
+        RedCAPController._fire_gates(world, ac, tgt, detected)
+
+    @staticmethod
+    def _fire_gates(world: World, ac: Aircraft, tgt: Aircraft, detected: bool) -> None:
         dist = distance_3d(ac.state, tgt.state)
         if (detected and ac.ammo > 0 and not ac.departed
                 and dist < 0.8 * world.weapons.rmax_m(ac, tgt)):

@@ -366,12 +366,84 @@ def test_doctrine_shoot_assess_shoot_one_in_flight():
     assert r.blue_shots == 1
 
 
-def test_doctrine_shoot_shoot_assess_pair_then_hold():
+def test_doctrine_shoot_assess_shoot_per_contact_multi_target():
+    """SAS is per contact: one missile at each of three Reds on consecutive
+    steps, never a second one at a contact while its missile flies."""
+    b1 = blue(0.0, 0.0, alt=9000.0)
+    reds = [red(3000.0 * i, 45_000.0, alt=9000.0, uid=f"R{i + 1}") for i in range(3)]
+    for rr in reds:
+        rr.ammo = 0
+    refire = []
+
+    def blue_ctl(w):
+        b1.cmd_heading_rad = math.atan2(reds[1].state.x, reds[1].state.y - b1.state.y)
+        busy = {m.target_id for m in w.missiles if m.alive}
+        refire.extend(w.may_fire_at(b1, t) for t in busy)
+        for rr in reds:
+            if rr.state.alive and w.may_fire_at(b1, rr.id):
+                b1.cmd_fire, b1.fire_target = True, rr.id
+                return
+
+    def red_ctl(w):
+        for rr in reds:
+            rr.cmd_heading_rad = math.pi
+    w = World([b1] + reds, SimConfig(max_time_s=25.0, seed=3,
+                                     blue_doctrine=SHOOT_ASSESS_SHOOT),
+              blue_ctl, red_ctl, record=False)
+    r = w.run()
+    assert [s["target"] for s in r.shots] == ["R1", "R2", "R3"]
+    ts = [s["launch_t"] for s in r.shots]
+    assert ts[1] - ts[0] == pytest.approx(w.config.dt) and ts[2] - ts[1] == pytest.approx(w.config.dt)
+    assert refire and not any(refire)          # busy contacts never cleared to re-fire
+    assert b1.ammo == 1
+
+
+def test_doctrine_shoot_shoot_assess_pair_then_hold_that_contact():
+    # retarget after the first shot: the due second shot is redirected to R1
     w, r = _doctrine_world(SHOOT_SHOOT_ASSESS, n_red=2, retarget=1)
     ts = [s["launch_t"] for s in r.shots]
-    assert len(ts) == 2 and ts[1] - ts[0] == pytest.approx(3.0)
-    assert {s["target"] for s in r.shots} == {"R1"}     # second shot redirected to R1
-    assert r.shots[0]["outcome"] == "in_flight"          # nothing more while both fly
+    assert ts[1] - ts[0] == pytest.approx(3.0)
+    assert [s["target"] for s in r.shots[:2]] == ["R1", "R1"]
+    # single contact: no third shot while the pair is in flight
+    w, r = _doctrine_world(SHOOT_SHOOT_ASSESS, n_red=1)
+    assert r.blue_shots == 2 and all(s["outcome"] == "in_flight" for s in r.shots)
+
+
+def test_doctrine_shoot_shoot_assess_per_contact_engages_second_target_promptly():
+    """Pair in flight at R1: B1 can fire at R2 at once, and never re-fires at R1."""
+    b1 = blue(0.0, 0.0, alt=9000.0)
+    reds = [red(3000.0 * i, 45_000.0, alt=9000.0, uid=f"R{i + 1}") for i in range(2)]
+    for rr in reds:
+        rr.ammo = 0
+    b1.ammo = 6
+    blocked_r1 = []
+
+    def blue_ctl(w):
+        b1.cmd_heading_rad = math.atan2(reds[0].state.x, reds[0].state.y - b1.state.y)
+        want = [rr for rr in reds if rr.state.alive]
+        if any(m.target_id == "R1" and m.alive for m in w.missiles) and len(
+                [m for m in w.missiles if m.target_id == "R1"]) == 2:
+            blocked_r1.append(not w.may_fire_at(b1, "R1"))
+        for rr in want:                      # prefer R1, fall back like the controllers
+            if w.may_fire_at(b1, rr.id):
+                b1.cmd_fire, b1.fire_target = True, rr.id
+                return
+
+    def red_ctl(w):
+        for rr in reds:
+            rr.cmd_heading_rad = math.pi
+    w = World([b1] + reds, SimConfig(max_time_s=25.0, seed=3,
+                                     blue_doctrine=SHOOT_SHOOT_ASSESS),
+              blue_ctl, red_ctl, record=False)
+    r = w.run()
+    by_t = [(s["launch_t"], s["target"]) for s in r.shots]
+    r1 = [t for t, tg in by_t if tg == "R1"]
+    r2 = [t for t, tg in by_t if tg == "R2"]
+    assert len(r1) == 2 and r1[1] - r1[0] == pytest.approx(3.0)
+    assert len(r2) == 2 and r2[1] - r2[0] == pytest.approx(3.0)
+    assert r2[0] - r1[1] == pytest.approx(w.config.dt)   # next step after the R1 pair
+    assert blocked_r1 and all(blocked_r1)                   # R1 blocked while its pair flies
+    assert r.blue_shots == 4 and b1.ammo == 2               # no third pair: both contacts busy
 
 
 def test_doctrine_legacy_ripples():

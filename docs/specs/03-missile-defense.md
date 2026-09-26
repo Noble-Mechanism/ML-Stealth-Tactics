@@ -190,8 +190,9 @@ RWR gives no range. So:
 - A cranking jet can still fire and support. A beaming or dragging jet cannot fire,
   and it drops support, so its missile coasts (spec 2b). PRESSING jets shoot
   normally. DEPARTED jets never fire.
-- ~~At most one live missile per shooter per target~~ — superseded by the firing
-  doctrines of change C. (Before spec 3 every jet rippled all 4 missiles in 2 s:
+- At most one live missile per shooter per target — now the per-contact
+  `shoot_assess_shoot` doctrine of change C, with `shoot_shoot_assess` as the
+  pair alternative. (Before spec 3 every jet rippled all 4 missiles in 2 s:
   in `default_4v3` B1 and B2 put 8 missiles on R1 between 65 and 69 s, which made
   any defense meaningless.) This **changes Blue baseline results.**
 
@@ -251,10 +252,18 @@ rise to the beam. Spec 1 doc and tests updated (slope bound 0.03 → 0.035/deg).
 - Lookdown/lookup clutter is deferred (below).
 
 **C — Firing doctrine per jet, both sides (approved).**
-- `shoot_assess_shoot` (SAS): at most one own missile in flight.
-- `shoot_shoot_assess` (SSA): two missiles at the same target, the second 3 s
-  after the first (`SimConfig.ssa_interval_s`), then no shots at anyone until
-  both are resolved.
+Both doctrines are **per contact** (follow-up approved by Rusty 2026-09-25; the
+first implementation was global, i.e. SAS = one missile in flight overall and SSA =
+nothing at anyone until the pair resolved).
+- `shoot_assess_shoot` (SAS): at most **one own missile in flight per target**. A
+  jet can engage several contacts at once, one missile each, and cannot re-fire
+  at a target until its missile at that target resolves.
+- `shoot_shoot_assess` (SSA): a pair at one target, the second 3 s after the
+  first (`SimConfig.ssa_interval_s`); then no more shots at **that** target until
+  both resolve. The jet may immediately engage a different target with its own
+  pair (inventory and the normal launch gates still apply).
+- *Why per contact:* the network (specs 5/6) should decide when and how many
+  shots come off; the doctrine only limits missiles per contact.
 - Defaults: Red SAS (spec 4 will randomize), Blue configurable
   (`SimConfig.blue_doctrine`, default SAS; spec 5 may make it a network output).
   Per-jet override `Aircraft.firing_doctrine`.
@@ -266,6 +275,11 @@ rise to the beam. Spec 1 doc and tests updated (slope bound 0.03 → 0.035/deg).
 - Notching and chaff/countermeasures (sensor model has no Doppler or clutter;
   chaff must never be very effective).
 - Lookdown/lookup clutter (a low dragging jet is as visible as a high one).
+- **Follow-up (intentional):** conservative Red (a < 1/3) drags on Blue's lock
+  before Blue reaches shot range, so the default genome gets no shots and fights
+  run to the cap. This is left for the network (specs 5/6) to solve (e.g. shoot
+  on a remote/IRST track, delay the lock, pincer). Fallback if it cannot:
+  increase the sim time cap.
 - Radar on/off control (spec 5).
 - Red missile launch warning.
 - Flight-level reactions (a wingman defending on a flightmate's cue).
@@ -300,7 +314,8 @@ rise to the beam. Spec 1 doc and tests updated (slope bound 0.03 → 0.035/deg).
    - Band edges at a = 0, 0.33, 0.34, 0.66, 0.67, 1, and the `T_cold` values.
    - State machine: triggers per band, threat-clear and TOF logic, turn-away
      counting, press vs depart, early end.
-   - Firing doctrines (SAS one in flight; SSA pair 3 s apart then hold).
+   - Firing doctrines per contact (SAS one per target, several contacts at once;
+     SSA pair 3 s apart, R1 blocked while its pair flies, R2 engaged at once).
    - 100 m floor, drag depth vs a, missile `ground` outcome.
    - A-pole and f-pole on a static geometry.
    - Same seed gives the same result.
@@ -314,129 +329,47 @@ rise to the beam. Spec 1 doc and tests updated (slope bound 0.03 → 0.035/deg).
    - **D.** Turn-away limit: two cycles, then a = 0.8 presses and a = 0.2 departs.
    - **E.** Blue test reaction against a Red shot (crank, then drag).
    - **F.** Blue shoot-shoot-assess.
-3. **100-seed stats** (`defense-stats`): `default_4v3`, default genome,
-   a ∈ {0, 0.25, 0.5, 0.75, 1}, Blue test reaction off and on. Report:
-   - Blue shots and hit rate, Red shots and hit rate, kills on each side
-   - engagement duration (median, p90, % reaching the 240 s cap)
-   - turn-aways, departures, defeat labels, a-pole and f-pole distributions
+3. **100-seed stats** (`spec3_outputs/defense_stats.txt`, `default_4v3`, default
+genome, cap 240 s, Red SAS). Per-contact doctrines (current). The previous global
+doctrine run is kept in `defense_stats_global_doctrine_old.txt`; old values in
+brackets. Hit = hits/shots.
 
-   Expected: as a falls, Blue hit rate and Red kills fall and fights get longer.
-   Flag it if the median duration exceeds 200 s.
-4. **Regression.** Re-run the spec 2 and 3a replays with defense off; results must be
-   identical.
+| Blue doct | test | a | B shots | B hit | R shots | R hit | B kills | R kills | dur med | p90 | % cap |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| any | any | 0 | 0 | – | 0 | – | 0 | 0 | 240 | 240 | 100 |
+| any | any | 0.25 | 0 | – | 0 | – | 0 | 0 | 222.8 | 224.5 | 0 (100 % early end) |
+| SAS | off | 0.5 | 11.07 [12.05] | 18 % [23] | 1.63 [0.90] | 39 % [40] | 2.04 [2.80] | 0.64 [0.36] | 240 [204.2] | 240 | 74 [18] |
+| SAS | off | 0.75/1 | 14.25 [10.3] | 20 % [29] | 9.80 [4.8] | 10 % [27] | 2.88 [2.93] | 1.02 [1.29] | 122.8 [143.2] | 147.1 [155.6] | 7 [5] |
+| SAS | on | 0.5 | 11.30 [11.44] | 18 % [23] | 1.12 [0.92] | 10 % [14] | 2.02 [2.59] | 0.11 [0.13] | 240 [205.5] | 240 | 74 [33] |
+| SAS | on | 0.75/1 | 12.69 [8.9] | 22 % [33] | 9.28 [3.15] | 0 % [1–2] | 2.77 [2.98] | 0.00 [0.05] | 123.5 [146.2] | 240 [165.3] | 24 [1–2] |
+| SSA | off | 0.5 | 13.92 [13.45] | 17 % [16] | 1.17 [1.59] | 44 % [46] | 2.30 [2.20] | 0.52 [0.73] | 240 [240] | 240 | 55 [63] |
+| SSA | off | 0.75/1 | 16.00 [15.85] | 12 % [19] | 10.72 [4.42] | 26 % [32] | 1.99 [2.94] | 2.78 [1.40] | 240 [145.0] | 240 [150.6] | 84 [2–3] |
+| SSA | on | 0.5 | 14.13 [13.91] | 16 % [16] | 1.05 [1.26] | 8 % [22] | 2.31 [2.23] | 0.08 [0.28] | 240 [240] | 240 | 55 [63] |
+| SSA | on | 0.75/1 | 16.00 [13.57] | 12 % [21] | 10.69 [3.30] | 0 % [3–4] | 1.96 [2.89] | 0.00 [0.11] | 240 [145.5] | 240 | 100 [11] |
 
-## Runtime estimate
+- Median duration > 200 s is flagged for every a ≤ 0.5 row and now also SSA at
+  a ≥ 0.75.
+- Per contact, every jet spreads missiles over all contacts in range: Red at
+  a ≥ 0.75 fires 9–11 of its 12 missiles (was 3–5) at lower Pk.
+- With SSA, Blue empties all 16 missiles in pairs early (12 % hits), kills ~2 and
+  then can't finish: 84–100 % of fights hit the cap. In 20-seed spot checks at
+  a = 1, SSA ends 16 Blue shots, 2 kills, at the cap in most seeds; SAS ends with
+  3 kills before the cap.
+- a = 0 and 0.25 are unchanged (no shots). a = 0.75 and 1 are identical to the
+  printed precision.
+- Pre-spec-3 (legacy firing, no defense): Blue 16 shots at 12.5 %, Red 12 at
+  8.3 %, 2 kills / 1 loss every seed.
+- Pole medians (SAS, test off, a = 1): Blue launch/a-pole/f-pole 23.6/19.8/12.5 NM
+  (was 12.2/12.2/11.0: first shots now come off at long range on several
+  contacts), Red 14.6/14.6/8.6 NM. Full distributions and defeat labels are in the
+  stats file.
 
-- **Today:** 0.47 s per engagement (`default_4v3`, 240 s, measured today). Missile
-  integration takes about 25 % of that and sensors about 50 %.
-- **Added cost:** RWR modes are O(Blue × Red) lookups per step, and the state
-  machine is O(n). Together about **+3–5 %**.
-- **Saved cost:** one live missile per shooter per target cuts missile-seconds.
-- **Duration:** fights cannot grow past the cap, and today's runs already reach
-  240 s.
-- **Net expectation: 0.42–0.52 s per engagement**, measured and reported.
-- The envelope table is not rebuilt (no kinematic change, so the cache key is the
-  same).
-- The stats run (10 configurations × 100 seeds) takes about 8 min serial.
-
-## Implementation (2026-09-25)
-
-**Code.** `sim/rwr.py`, `tactics/maneuvers.py`, `tactics/red_defense.py`
-(`DefenseConfig`, `RedDefense`), `analysis/blue_test_defense.py`,
-`analysis/defense_replays.py`, `analysis/defense_stats.py`; changes in
-`sim/world.py` (RWR step after sensors, doctrines, early end, `SimResult.shots` /
-`red_shots` / `ended_early`), `sim/weapons.py` (poles, `ground`), `sim/aircraft.py`
-(floor, `radar_emitting`, `firing_doctrine`, `defense_state`, `departed`),
-`tactics/interpreter.py` (`RedCAPController(defense=...)`), scenario loader
-(`red_aggressiveness`, `red_defense`, `blue_doctrine`, `red_doctrine`), GA config
-(same four fields; default defense on, a = 0.5, SAS both sides), ACMI exporter,
-CLI (`defense-replays`, `defense-stats`; `evolve`/`simulate` get
-`--red-aggressiveness`, `--no-red-defense`, `--blue-doctrine`, `--red-doctrine`).
-**Tests:** 138 pass (106 before; +32 in `tests/test_missile_defense_spec3.py`;
-`tests/test_sensors_spec1.py` updated for change A).
-
-**Deviations and judgment calls.**
-- Blue test reaction lives in `analysis/blue_test_defense.py` (re-exported from
-  `defense_replays`), not inside `defense_replays.py`. It drags with a = 0.5 depth.
-- RWR bearings (5° noise) are smoothed with an EMA (weight 0.5) inside the defense
-  so the crank/beam heading does not jitter; the crank/beam side (short way) is
-  picked once when the defense starts and then held.
-- SSA: if the jet's normal target choice changes between the two shots, the second
-  shot is redirected to the salvo target (the pair always goes at one target).
-- Shot table records the target's defense state at launch and at missile end.
-- `a_pole_m` is recorded only if the shooter is alive when the seeker goes active.
-- Regression: with `red_defense=False` and `legacy` firing the code is
-  bit-for-bit identical to pre-spec-3 on 100/100 seeds of `default_4v3` **with the
-  old RCS table**. With the new table (change A), default_4v3 outcomes are still
-  identical; spec 3a replays identical; spec 2 hit rates identical (FC gap % and
-  event timings move by ~1 point because the sensor RNG consumes different draws);
-  spec 1 beam-then-hot shifts slightly (Red detection 28.9 → 28.7 NM).
-- Replay B: Red's FC range vs an offset F-35 is only ~20 NM, so Red's shot goes
-  active (186 s) before Blue's missile goes active and triggers the crank (188 s).
-  The replay shows the crank keeping radar and FC and a **new shot fired while
-  cranking** (M0003 at 216 s, supported), rather than supporting a pre-active
-  missile through the crank.
-- Within the aggressive band a = 0.75 and a = 1 give almost identical stats: only
-  T_cold differs and a cranking jet in COLD still fires and supports.
-- a ≤ 0.25: Red hears Blue's lock at 29 NM, before Blue's shot range
-  (~0.75 × Rmax ≈ 24 NM), and drags; nobody shoots. Median duration > 200 s is
-  flagged for a ≤ 0.5 (see stats). Tuning (Blue shooting on a remote/IRST track,
-  shorter Blue lock range, fitness for chasing a runner) is left to specs 4–7.
-- Stats vary Blue's doctrine (SAS/SSA); Red is SAS in all rows.
-
-**Replays** (`spec3_outputs/defense_replays.txt` + ACMI; 1v1 unless noted).
-- **A** (a = 0, seed 1): lock cue at 106 s (27.9 NM) → drag toward 100 m;
-  threat cleared 154.5 s, cold 40 s, recommit 194.5 s at ~1,680 m; second lock →
-  drag at 210 s (2/2), reaches the 100 m floor by 250 s. Blue never gets a shot.
-- **B** (a = 1, seed 4): R1 fires at 177 s (19.8 NM), B1 fires back 177.5 s;
-  R1 cranks on missile active at 188 s (1/2), both missiles miss on the Pk roll
-  (Pk 0.59 / 0.40); R1 fires again while cranking (216 s); recommits after 5 s
-  cold and cranks again at 231.5 s (2/2).
-- **C** (a = 0.5, seed 4): R1 beams on the support cue at 178 s; its own missile
-  loses support at 184.5 s and coasts to active (Pk factor 0.99); Blue's missile
-  is defeated by speed at 228.5 s (Mach 1.20, 4.4 NM); cold 22.5 s.
-- **D1** (a = 0.8, seed 7): cranks at 129 s and 197 s, recommits after 12 s cold;
-  presses at 251.5 s on the third missile-active cue (M0005 defeated opening).
-  No kills.
-- **D2** (a = 0.2, seed 1): drags at 106 s (to 1,720 m) and 201.5 s (to 572 m),
-  departs on the third lock at 293 s; engagement ends early at 293.5 s.
-- **E** (Red defense off, seed 1): B1 fires at 170 s; R1 fires at 177 s; B1
-  cranks 50° while supporting (177.5 s) – the lower aspect costs Red its FC, so
-  Red's missile coasts – then drags from 183.5 s when its own missile goes active;
-  Red's missile is defeated by speed at 237 s (6.1 NM). Blue's missile misses
-  (Pk 0.43).
-- **F** (Blue SSA vs two unarmed Reds, seed 2): M1/M2 at R1 at 105.5/108.5 s
-  (29 NM); B1 holds fire for 54.5 s with a valid shot on R2; M1 hits R1 at 160 s;
-  new pair at R2 at 160.5/163.5 s; M3 hits at 181.5 s. 2 kills, 4 shots.
-
-**100-seed stats** (`spec3_outputs/defense_stats.txt`, `default_4v3`, default
-genome, cap 240 s, Red SAS). Hit = hits/shots.
-
-| Blue doct | test | a | B shots | B hit | R shots | R hit | B kills | R kills | dur med | p90 | % cap | turn-aways | departs |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| SAS | off | 0 | 0 | – | 0 | – | 0 | 0 | 240 | 240 | 100 | 6.0 | 1.32 |
-| SAS | off | 0.25 | 0 | – | 0 | – | 0 | 0 | 222.8 | 224.5 | 0 (100 % early end) | 6.0 | 3.0 |
-| SAS | off | 0.5 | 12.05 | 23 % | 0.90 | 40 % | 2.80 | 0.36 | 204.2 | 240 | 18 | 4.44 | 0 |
-| SAS | off | 0.75 | 10.28 | 29 % | 4.80 | 27 % | 2.93 | 1.29 | 143.2 | 155.6 | 5 | 3.04 | 0 |
-| SAS | off | 1 | 10.27 | 29 % | 4.81 | 27 % | 2.93 | 1.29 | 143.2 | 155.6 | 5 | 3.04 | 0 |
-| SAS | on | 0.5 | 11.44 | 23 % | 0.92 | 14 % | 2.59 | 0.13 | 205.5 | 240 | 33 | 4.45 | 0 |
-| SAS | on | 1 | 8.89 | 33 % | 3.13 | 1 % | 2.97 | 0.04 | 146.2 | 165.3 | 2 | 3.11 | 0 |
-| SSA | off | 0.5 | 13.45 | 16 % | 1.59 | 46 % | 2.20 | 0.73 | 240 | 240 | 63 | 4.10 | 0 |
-| SSA | off | 1 | 15.85 | 19 % | 4.41 | 32 % | 2.94 | 1.39 | 145.0 | 150.6 | 3 | 2.97 | 0 |
-| SSA | on | 0.5 | 13.91 | 16 % | 1.26 | 22 % | 2.23 | 0.28 | 240 | 240 | 63 | 4.14 | 0 |
-| SSA | on | 1 | 13.56 | 21 % | 3.32 | 4 % | 2.89 | 0.13 | 145.5 | 240 | 11 | 2.98 | 0 |
-
-a = 0 and 0.25 rows are identical for all four Blue settings. Median duration
-> 200 s is flagged for every a ≤ 0.5 row. Pre-spec-3 (legacy firing, no defense):
-Blue 16 shots at 12.5 %, Red 12 at 8.3 %, 2 kills / 1 loss every seed. Pole
-medians (SAS, test off, a = 1): Blue launch/a-pole/f-pole 12.2/12.2/11.0 NM, Red
-14.5/14.5/8.1 NM. Full distributions and defeat labels in the stats file.
-
-**Runtime.** 0.44 s per engagement at the default (a = 0.5, SAS; pre-spec-3 0.47 s;
-legacy + defense off 0.50 s, +5 % for RWR). Stats run: 2,000 engagements in 112 s
-on a process pool. Smoke evolve (pop 12, gens 3, seed 42): 15.7 s wall, best
-fitness 439.83 (3 kills, 0 losses, 139 s), reproducible.
+**Runtime.** 0.49 s per engagement at the default (a = 0.5, per-contact SAS; mean
+fight 229 s; SSA 0.46 s; pre-spec-3 0.47 s; legacy + defense off 0.50 s, +5 % for
+RWR). Stats run: 2,000 engagements in 122 s on a process pool. Smoke evolve
+(pop 12, gens 3, seed 42): 15.4 s wall, best fitness 442.42 (3 kills, 0 losses,
+123.5 s), reproducible (global-doctrine run: 439.83).
 
 **Outputs** (`/workspace/spec3_outputs/`): `defense_replays.txt`, `replayA`–`F`
-ACMI files, `defense_stats.txt`, `regression.txt`, `smoke_evolve.txt`,
+ACMI files, `defense_stats.txt`, `defense_stats_global_doctrine_old.txt`, `regression.txt`, `smoke_evolve.txt`,
 `rcs_change/` (aspect table, spec 2 re-run), `regression/`, `baseline_pre/`.

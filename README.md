@@ -112,8 +112,9 @@ Red jets hear Blue radar modes on an RWR (search / lock / support / missile
 active) and defend by aggressiveness band: conservative drags on a lock (dives
 toward the 100 m AGL floor), middle beams on support, aggressive cranks 50° on
 missile active and keeps shooting. After two turn-aways a jet presses (a ≥ 0.5)
-or leaves. Every jet fires shoot-assess-shoot (one missile in flight) or
-shoot-shoot-assess (two at one target, 3 s apart). See
+or leaves. Every jet fires shoot-assess-shoot (one missile in flight per contact) or
+shoot-shoot-assess (a pair per contact, 3 s apart), and can engage several
+contacts at once. See
 `docs/specs/03-missile-defense.md`.
 
 ## Tests
