@@ -48,14 +48,16 @@ LINK_WEAPON_TYPES = {"link_track", "launch", "launch_remote", "support_handoff",
                      "press", "depart", "blue_defend", "blue_recommit",
                      # Spec 4 presentations
                      "preplanned_start", "preplanned_skip", "preplanned_abort",
-                     "preplanned_end", "breakup", "winchester"}
+                     "preplanned_end", "breakup", "winchester",
+                     # Spec 5 network interface
+                     "radar"}
 ALWAYS_BOOKMARK = {"launch", "launch_remote", "support_handoff", "autonomous",
                    "support_lost", "hit", "miss", "timeout", "support_regained",
                    "lost_coast_timeout", "lost_basket", "support_dropped",
                    "defeat_speed", "defeat_opening", "miss_overshoot",
                    "ground", "defend", "recommit", "press", "depart",
                    "blue_defend", "blue_recommit",
-                   "preplanned_start", "preplanned_abort", "winchester"}
+                   "preplanned_start", "preplanned_abort", "winchester", "radar"}
 NM_M = 1852.0
 
 
@@ -120,6 +122,7 @@ class ACMIExporter:
         introduced: set = set()
         last_alive: Dict[str, bool] = {}
         last_lock: Dict[str, Optional[str]] = {}
+        last_radar: Dict[str, bool] = {}
         bookmarked: set = set()
         markers_live: set = set()
 
@@ -151,6 +154,12 @@ class ACMIExporter:
                     elif uid in last_lock:
                         lock_str = ",LockedTargetMode=0,LockedTarget="
                     last_lock[uid] = lock
+                # Spec 5 L: RadarMode only after a radar has gone silent once, so
+                # default (always emitting) exports are byte-for-byte unchanged.
+                radar_on = bool(st.get("radar", True))
+                if radar_on != last_radar.get(uid, True):
+                    lock_str += f",RadarMode={1 if radar_on else 0}"
+                    last_radar[uid] = radar_on
 
                 if uid not in introduced:
                     coalition = st["coalition"]

@@ -163,6 +163,33 @@ stores every drawn value, and its seed also sets the sim's noise seed, so the
 same genome against the same presentation replays byte-for-byte. See
 `docs/specs/04-red-presentations.md`.
 
+## Network interface (Spec 5)
+
+```bash
+# Adapter test (layers 1-3 + radar-silent variant), layer 2 noise check,
+# radar-silent TacView replay + timeline, random-weights smoke run, timing
+python -m stealth_tactics interface-adapter-test -o /workspace/spec5_outputs
+# One jet's named 231-input observation at a decision time
+python -m stealth_tactics obs-dump --presentation 0 --stats-index --t 120 --jet B2
+# Random-weights 231-64-64-13 MLP flying Blue through the full interface
+python -m stealth_tactics network-smoke -n 4
+```
+
+Each Blue jet sees only its own perceived picture: its sensors, the datalink,
+its RWR, plus exact own-side information. The picture is built by
+`World.blue_view` and flattened into 231 inputs (`OBS_SPEC`). The jet
+outputs 13 numbers (`ACTION_SPEC`):
+- heading relative to the chosen target, or to the ingress axis if there is
+  no target;
+- altitude and speed;
+- a target slot;
+- fire, radar on/off and pair (SSA) bits.
+
+`NetworkBlueController(policy, blue_ids)` decides once per second. All launch
+gates stay in the sim. A radar-off jet makes no radar tracks and is not heard
+by Red's RWR, but it can still fire on a wingman's fire-control track. See
+`docs/specs/05-network-interface.md`.
+
 ## Tests
 
 ```bash
@@ -197,17 +224,20 @@ stealth_tactics/
   sim/        # point-mass world, sensors (+ sensor_config, tracks), datalink, fusion,
               # weapons, missile_kinematics (fly-out), missile_envelope (Rmax table), rwr
   analysis/   # sensor table, scripted sensor / datalink / missile / defense replays,
-              # missile sweep, defense stats, Blue test reaction
+              # missile sweep, defense stats, Blue test reaction, spec 5 interface adapter test
   tactics/    # genome + interpreter, maneuvers (primitives), red_defense (state machine),
               # preplanned (spec 4 presentation Red controller + maneuver kinds)
   ga/         # elitist GA (scenario YAML or spec 4 presentations)
   acmi/       # ACMI 2.2 exporter
   scenarios/  # YAML/JSON loader, presentation sampler + presentation_menus.yaml
+  policy/     # spec 5 network interface: view (truth firewall), observation, action,
+              # controller, adapters (scripted-via-interface, HandBlue, random MLP)
   presentation_runner.py  # run / export one presentation
 scenarios/    # default_4v3.yaml, cap_4v2.yaml
 docs/design.md, docs/specs/01-sensors.md, docs/specs/02-track-sharing.md,
 docs/specs/02b-coast-and-lock.md, docs/specs/03a-missile-kinematics.md,
-docs/specs/03-missile-defense.md, docs/specs/04-red-presentations.md
+docs/specs/03-missile-defense.md, docs/specs/04-red-presentations.md,
+docs/specs/05-network-interface.md
 tests/
 ```
 

@@ -499,6 +499,26 @@ def cmd_replay_champion(args: argparse.Namespace) -> int:
     return 0 if ok and same else 1
 
 
+def cmd_interface_adapter_test(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from stealth_tactics.analysis.interface_adapter import main as ia_main
+    print(ia_main(n=args.n, workers=args.workers, out_dir=Path(args.out),
+                  do_timing=not args.no_timing, noise_check=not args.no_noise_check))
+    return 0
+
+
+def cmd_obs_dump(args: argparse.Namespace) -> int:
+    from stealth_tactics.policy.debug import obs_dump
+    print(obs_dump(args.presentation, args.t, args.jet, stats_index=args.stats_index))
+    return 0
+
+
+def cmd_network_smoke(args: argparse.Namespace) -> int:
+    from stealth_tactics.analysis.interface_adapter import random_smoke
+    print(random_smoke(args.n, args.policy_seed))
+    return 0
+
+
 def cmd_presentation_replays(args: argparse.Namespace) -> int:
     from stealth_tactics.analysis.presentation_replays import make_replays
     print(make_replays(Path(args.out)))
@@ -629,6 +649,29 @@ def main(argv: list[str] | None = None) -> int:
     p_pr.add_argument("-o", "--out", default=None)
     p_pr.set_defaults(func=cmd_presentation_replays)
 
+    p_ia = sub.add_parser("interface-adapter-test",
+                          help="Spec 5 Q: adapter layers 1-3, radar-silent replay, smoke, timing")
+    p_ia.add_argument("-n", type=int, default=100)
+    p_ia.add_argument("--workers", type=int, default=8)
+    p_ia.add_argument("--no-timing", action="store_true")
+    p_ia.add_argument("--no-noise-check", action="store_true")
+    p_ia.add_argument("-o", "--out", default="/workspace/spec5_outputs")
+    p_ia.set_defaults(func=cmd_interface_adapter_test)
+
+    p_od = sub.add_parser("obs-dump", help="Spec 5: print one jet's named observation")
+    p_od.add_argument("--presentation", type=int, default=0,
+                      help="presentation seed (or index with --stats-index)")
+    p_od.add_argument("--stats-index", action="store_true",
+                      help="treat --presentation as an index into the 100 stats seeds")
+    p_od.add_argument("--t", type=float, default=60.0)
+    p_od.add_argument("--jet", default="B2")
+    p_od.set_defaults(func=cmd_obs_dump)
+
+    p_ns = sub.add_parser("network-smoke", help="Spec 5: random-weights MLP through the interface")
+    p_ns.add_argument("-n", type=int, default=4)
+    p_ns.add_argument("--policy-seed", type=int, default=7)
+    p_ns.set_defaults(func=cmd_network_smoke)
+
     for p in (p_ev, p_sim):
         p.add_argument("--red-aggressiveness", type=float, default=None,
                        help="Spec 3: Red flight aggressiveness a in [0,1] (default: scenario)")
@@ -640,7 +683,8 @@ def main(argv: list[str] | None = None) -> int:
                        choices=["shoot_assess_shoot", "shoot_shoot_assess", "legacy"])
 
     args = parser.parse_args(argv)
-    if args.command in ("sensors-table", "sample-presentation", "replay-champion"):
+    if args.command in ("sensors-table", "sample-presentation", "replay-champion",
+                        "interface-adapter-test", "obs-dump", "network-smoke"):
         return args.func(args)
     if args.out is None:
         root = _project_root()

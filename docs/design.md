@@ -200,6 +200,54 @@ sourced missile data.
   default; `export_presentation_acmi` writes the presentation summary into
   `0,Comments=`.
 
+## Network interface (Spec 5 — see `docs/specs/05-network-interface.md`)
+
+The seam for the spec 6+ neural network. Spec 6 needs only `OBS_SPEC.size`
+(231), `ACTION_SPEC.size` (13) and a `policy(obs_batch) -> out_batch` callable.
+
+- **Truth firewall** (`policy/view.py`): `World.blue_view(ac)` builds a frozen
+  `BlueView` from whitelisted perception only. It holds own and flightmate
+  state (exact; own side), the jet's fused picture (estimate, sigma, sensor,
+  age, radar velocity estimate), own and remote FC, doctrine permission, RWR
+  cues, Blue missiles (weapon datalink) and confirmed kills. It never holds a
+  Red `Aircraft`, a track component (`true_range_m`), Pk or
+  `primary_fc_target`.
+- **Observation** (`policy/observation.py`), per jet, 231 inputs:
+  - own 21: slot one-hot, altitude, speed, heading vs the ingress axis (north),
+    ammo, time, radar on, own-missile states, pair open, missile warnings,
+    kills;
+  - 6 contact slots × 28: slot 0 holds the current target, the rest are
+    ordered by perceived range, then bearing-only RWR contacts. Each has
+    perceived range, bearing, altitude delta, aspect, closure, speed, sigma,
+    age, sensor, own/remote FC, r/Rmax and r/Rne from the envelope on
+    perceived states, doctrine OK, shot ready, missiles on it, mates
+    targeting it, and RWR mode;
+  - 3 element-relative wingmen × 14.
+
+  Fixed scales; declared ranges [0, 1], [−1, 1] or [0, 1.5] (altitude delta
+  ±1.5).
+- **Action** (`policy/action.py`), 13 outputs:
+  - heading offset ±180° about the chosen target's bearing (the ingress axis
+    if there is no target);
+  - altitude 100–15,000 m and speed 90–340 m/s (linear);
+  - 6 + 1 target logits (argmax over present slots and "none");
+  - fire, radar on/off, pair (SSA) bits.
+- **Controller** (`policy/controller.py`): `NetworkBlueController` decides
+  every 1 s (t = 0, 1, 2 …), batches all live jets, holds commands between
+  decisions, re-asserts fire each step, enforces a 5 s radar dwell, and sets
+  the per-jet doctrine from the pair bit only while no pair is open. All
+  launch gates (FC, range, off-boresight, ammo, doctrine) stay in the World,
+  so the network cannot cheat.
+- **Radar off** (`Aircraft.radar_emitting`, default on): no own radar tracks
+  or FC; not heard by Red RWR (modes or spec 1 component); IRST, datalink and
+  RWR still work. The jet can launch on a flightmate's FC, and support is
+  handed to the FC holder. ACMI `RadarMode` is written only on a change.
+- **Adapters** (`policy/adapters.py`): `ScriptedViaInterface` runs the script
+  through encode → decode, `HandBlue` is an obs-only hand policy, and
+  `RandomMLPPolicy` is the smoke-test net. `interface-adapter-test` runs the
+  three-layer sufficiency test (results in the spec's Implementation section).
+- **Cost:** +11 % per generation at 1 s (187 s vs 169 s on 8 workers).
+
 ## Tactics genome (high-level)
 
 Not stick-and-throttle traces. Genes encode:

@@ -306,6 +306,23 @@ class World:
                 self._salvo.pop(ac.id, None)   # pair complete: per-contact block now
         self._shot_info[m.id] = {"target_state_launch": tgt.defense_state}
 
+    def ssa_pair_open(self, ac: Aircraft) -> bool:
+        """Spec 5 K: True while *ac* has a shoot-shoot-assess pair open (first
+        shot flying at a live target, second not yet fired). Read-only."""
+        salvo = self._salvo.get(ac.id)
+        if salvo is None:
+            return False
+        tgt_id, _t1, mid1 = salvo
+        tgt = self._by_id.get(tgt_id)
+        return (any(m.id == mid1 and m.alive for m in self.missiles)
+                and tgt is not None and tgt.state.alive)
+
+    def blue_view(self, ac: Aircraft):
+        """Spec 5 A: restricted, truth-free picture of Blue jet *ac*
+        (``stealth_tactics.policy.view.BlueView``)."""
+        from stealth_tactics.policy.view import build_blue_view
+        return build_blue_view(self, ac)
+
     def _all_red_departed(self) -> bool:
         reds = self.alive(Coalition.RED)
         return (bool(reds) and all(r.departed for r in reds)
@@ -408,6 +425,8 @@ class World:
                 # closest fire-control track (ACMI LockedTarget); refreshed after
                 # the sensor update at this same time
                 "locked_target": self.sensors.primary_fc_target(ac.id),
+                # spec 5 L (ACMI RadarMode only written once a radar goes silent)
+                "radar": ac.radar_emitting,
             }
         mstates = []
         for m in self.missiles:

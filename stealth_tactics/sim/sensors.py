@@ -179,6 +179,8 @@ def rwr_detects(receiver: Aircraft, emitter: Aircraft,
         return False
     if receiver.coalition == emitter.coalition:
         return False
+    if not emitter.radar_emitting:          # spec 5 L: a silent radar is not heard
+        return False
     rc = cfg.radar
     if not in_field_of_regard(emitter.state, receiver.state, rc.for_az_deg, rc.for_el_deg):
         return False
@@ -205,6 +207,11 @@ class SensorModel:
 
     # ---- single-draw helpers (used by update, tests and the sensor table) --
     def radar_measure(self, obs: Aircraft, tgt: Aircraft) -> Optional[dict]:
+        # Spec 5 L: a silent (non-emitting) radar makes no detections, so own
+        # radar tracks coast out and own fire control drops (gap rule). IRST,
+        # RWR and datalink tracks are unaffected. Default emitting: no change.
+        if not obs.radar_emitting:
+            return None
         pd = radar_pd(obs, tgt, self.cfg)
         if pd <= 0.0 or self.rng.random() >= pd:
             return None
