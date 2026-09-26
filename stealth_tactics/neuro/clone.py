@@ -55,14 +55,15 @@ def _collect_job(args):
     return np.vstack([o for o, _ in sink]), np.vstack([a for _, a in sink])
 
 
-def presentations(master_seed: int, salt: int, n: int) -> List[dict]:
+def presentations(master_seed: int, salt: int, n: int, pcfg=None) -> List[dict]:
     from stealth_tactics.scenarios.presentation import _set, DEFAULT_PRESENTATION_CONFIG
-    return [p.to_dict() for p in _set(master_seed, salt, 0, n, DEFAULT_PRESENTATION_CONFIG)]
+    return [p.to_dict() for p in _set(master_seed, salt, 0, n,
+                                      pcfg or DEFAULT_PRESENTATION_CONFIG)]
 
 
-def collect(master_seed: int, n_pres: int, pool, max_time_s: float = 360.0):
+def collect(master_seed: int, n_pres: int, pool, max_time_s: float = 360.0, pcfg=None):
     out = pmap(pool, _collect_job, [(p, max_time_s) for p in
-                                    presentations(master_seed, CLONE_SALT, n_pres)])
+                                    presentations(master_seed, CLONE_SALT, n_pres, pcfg)])
     return np.vstack([o for o, _ in out]), np.vstack([a for _, a in out])
 
 
@@ -144,9 +145,9 @@ def fit(obs: np.ndarray, act: np.ndarray, arch: Arch = DEFAULT_ARCH, seed: int =
 
 
 def gate(weights: np.ndarray, arch: Arch, master_seed: int, n_gate: int, pool,
-         max_time_s: float = 360.0) -> dict:
+         max_time_s: float = 360.0, pcfg=None) -> dict:
     """Clone vs HandBlue on held-out presentations: mean kills, losses, shots."""
-    pres = presentations(master_seed, GATE_SALT, n_gate)
+    pres = presentations(master_seed, GATE_SALT, n_gate, pcfg)
     res = {}
     for name, pol in (("hand", HandBlue()), ("clone", MLPPolicy(weights, arch))):
         out = pmap(pool, policy_job, [(pol, p, max_time_s, False) for p in pres])
@@ -163,24 +164,28 @@ def gate(weights: np.ndarray, arch: Arch, master_seed: int, n_gate: int, pool,
 
 def clone_hand(out_path, master_seed: int = 2026, n_pres: int = 200, n_gate: int = 100,
                epochs: int = 60, workers: int = 8, arch: Arch = DEFAULT_ARCH,
-               max_time_s: float = 360.0, log=print) -> dict:
+               max_time_s: float = 360.0, log=print, blue_start: str = "wall",
+               n_red: int = 6) -> dict:
+    from stealth_tactics.scenarios.presentation import presentation_config
+    pcfg = presentation_config(blue_start, n_red, max_time_s)
     t0 = time.perf_counter()
     pool = make_pool(workers)
     try:
-        obs, act = collect(master_seed, n_pres, pool, max_time_s)
+        obs, act = collect(master_seed, n_pres, pool, max_time_s, pcfg)
         log(f"clone data: {len(obs)} (observation, action) pairs from {n_pres} presentations "
             f"({time.perf_counter() - t0:.0f} s)")
         t1 = time.perf_counter()
         w, losses = fit(obs, act, arch, seed=master_seed, epochs=epochs, log=log)
         t_fit = time.perf_counter() - t1
-        g = gate(w, arch, master_seed, n_gate, pool, max_time_s) if n_gate else {}
+        g = gate(w, arch, master_seed, n_gate, pool, max_time_s, pcfg) if n_gate else {}
     finally:
         if pool is not None:
             pool.shutdown()
     genome = NetGenome([w], 0.02, {"id": -1, "parent": None, "born": 0, "origin": "clone"})
     info = {"n_samples": int(len(obs)), "n_pres": n_pres, "epochs": epochs,
             "final_loss": losses[-1], "losses": losses, "fit_s": t_fit, "gate": g,
-            "master_seed": master_seed, "fire_share": float((act[:, ACTION_SPEC.fire] > 0).mean()),
+            "master_seed": master_seed, "blue_start": blue_start, "n_red": n_red,
+            "fire_share": float((act[:, ACTION_SPEC.fire] > 0).mean()),
             "total_s": time.perf_counter() - t0}
     save_genome(out_path, genome, arch, extra={"clone": info})
     return info

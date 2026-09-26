@@ -9,6 +9,13 @@ The questions at the end are now recorded answers, and the Implementation
 section at the end gives the results. Numbers are still prototype
 placeholders, as in specs 1–5; fitness is today's placeholder (spec 7 owns it).
 
+**Update (Rusty, 2026-09-26, play package):** fitness is now spec 7 v1
+(`docs/specs/07-fitness.md`; network fitness = mean − 0.5 × std). The default
+start population is **all random** (`--init mixed` keeps 10 clones + 40
+random), and the default Blue start is the **30 NM line-abreast wall**
+(`--blue-start diamond` keeps the old geometry). The numbers below were
+measured before this change.
+
 ## What it does
 
 Spec 5 fixed the seam: each Blue jet gets a 231-input observation and returns

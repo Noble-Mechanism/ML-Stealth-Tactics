@@ -1,0 +1,28 @@
+# Fitness v1 (spec 7, approved by Rusty 2026-09-26). Edit freely; every run
+# records the weights it used (config + checkpoint) and they are part of the
+# run's config fingerprint, so `--resume` refuses a run whose weights changed.
+# Override per run:  evolve-net --fitness my_weights.yaml --fw blue_loss=-200
+#
+# Per fight:
+#   kills          x kill * (kill_ref_red / n_red)        (100 x 6 / n_red)
+#   Blue losses    x blue_loss, or blue_loss_egress if the jet was egressing
+#   Blue alive at the time cap x escape (placeholder escape rule)
+#   Red jets that left the fight out of missiles (Winchester) and were not
+#                  killed x red_winchester_depart (a quarter kill)
+#   Blue missiles fired x shot
+#   A fight with no Blue shots and no kills scores only the loss terms.
+# Per network: mean over its presentations - std_coef x std (population std).
+kill: 100.0
+kill_ref_red: 6
+blue_loss: -150.0
+blue_loss_egress: -250.0
+# egress = the dying jet's heading was more than this many degrees off the
+# bearing to the nearest live Red jet at its last 1 s sample (running away /
+# dragging cold). 120 deg keeps beaming (90 deg) out of "egress".
+egress_off_deg: 120.0
+escape: 10.0
+escape_only_at_time_cap: true
+red_winchester_depart: 25.0
+shot: -2.0
+no_engagement_loss_only: true
+std_coef: 0.5

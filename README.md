@@ -190,18 +190,91 @@ gates stay in the sim. A radar-off jet makes no radar tracks and is not heard
 by Red's RWR, but it can still fire on a wingman's fire-control track. See
 `docs/specs/05-network-interface.md`.
 
+## How to play (run evolution on your own server)
+
+Tested on Ubuntu with Python 3.11+. No GPU is needed (the Quadro stays idle;
+everything is numpy on the CPU).
+
+**Install**
+
+```bash
+sudo apt install -y python3-venv git
+git clone https://github.com/Noble-Mechanism/ML-Stealth-Tactics.git
+cd ML-Stealth-Tactics
+python3 -m venv .venv
+.venv/bin/pip install -e ".[plot,dev]"    # plot = matplotlib for the charts
+.venv/bin/python -m pytest -q             # optional: ~3 min, all tests should pass
+```
+
+**The one command** (runs until you stop it, on all cores):
+
+```bash
+scripts/overnight.sh -o runs/overnight
+```
+
+- Every generation writes a checkpoint to `runs/overnight/checkpoints/` (the
+  last 3 are kept).
+- **Stop** with Ctrl-C (or `systemctl stop`). **Resume** by running the same
+  command again: it picks up from the latest checkpoint, byte-identical to
+  a run that was never interrupted. You lose at most the generation that was
+  in progress.
+- **Survive reboots:** use the example unit `scripts/stealth-overnight.service`
+  (edit `User` and the paths, then `sudo cp` it to `/etc/systemd/system/` and
+  run `sudo systemctl enable --now stealth-overnight`). Or add a cron line
+  (`crontab -e`):
+  `@reboot cd /home/rusty/ML-Stealth-Tactics && scripts/overnight.sh -o runs/overnight >> runs/overnight.log 2>&1`
+
+**Where outputs go** (every 10 generations, in `runs/overnight/progress/`):
+- `progress.md` (generations, seconds per generation, champion kills and
+  losses, the last 30 generations);
+- `fitness.png` (best and mean per generation, and the champion's benchmark);
+- `champion_best.txt.acmi` and `champion_worst.txt.acmi` (open in TacView);
+- `champion.json` with `champion_weights.npz`;
+- `hall_of_fame.md` and `hall_of_fame/<cell>/`, one replayable champion per
+  tactic cell.
+
+**Key knobs** (all flags of `scripts/overnight.sh` / `evolve-net`):
+
+| flag | default | meaning |
+|---|---|---|
+| `--n-red` | 6 | Red flight size (6 or 8); a kill is worth 100 × 6 / n_red |
+| `--pop` | 50 | networks per generation |
+| `--presentations` | 24 | fights per network per generation |
+| `--seed` | 2026 | master seed (a different seed gives a different run) |
+| `--init` | random | start: `random` (50 random), `mixed` (10 clones of the hand policy + 40 random), `clone` |
+| `--blue-start` | wall | `wall` (4 jets line abreast, 30 NM wide) or `diamond` (old spec 4 start) |
+| `--fitness` | `scenarios/fitness.yaml` | fitness weights file (edit it or copy it) |
+| `--fw KEY=VALUE` | | override one weight, e.g. `--fw blue_loss=-200` |
+| `--workers` | all cores | worker processes |
+| `--every` | 10 | progress outputs every N generations |
+| `--gens` | until stopped | stop after this many generations in total |
+| `-o` | `runs/overnight` | output directory; use a new one when you change any knob |
+
+Changing any knob (including fitness weights) changes the run's
+fingerprint. Resuming an existing directory with different settings is
+refused on purpose, so give the new settings a new `-o`.
+
+**Replay any champion or hall-of-fame entry** (re-runs its stored fights
+and checks they reproduce byte-for-byte, then re-exports the ACMIs):
+
+```bash
+.venv/bin/python -m stealth_tactics replay-champion runs/overnight/progress
+.venv/bin/python -m stealth_tactics replay-champion runs/overnight/progress/hall_of_fame/r0_l1
+```
+
+**Caveat:** the Blue performance model is generous for an F-35 (treat it as
+Raptor-like). Fitness weights are v1 (`docs/specs/07-fitness.md`).
+
 ## Neural policy and neuroevolution (Spec 6)
 
 ```bash
 # Behaviour-clone HandBlue into the 231-64-64-13 network (gate: >= 80 % of its kills)
 python -m stealth_tactics clone-hand -o runs/clone
-# Evolve the network: 50 x 24 presentations, 10 clones + 40 random, novelty on
+# Evolve the network: 50 x 24 presentations, mixed start (default is all random), novelty on
 python -m stealth_tactics evolve-net --pop 50 --presentations 24 --gens 10 \
     --init mixed --clone runs/clone/clone.npz -o runs/net
 # Continue from the last checkpoint up to generation 20 in total (byte-identical)
 python -m stealth_tactics evolve-net --gens 20 --resume -o runs/net
-# Random-only control night (no human prior)
-python -m stealth_tactics evolve-net --init random -o runs/net_random
 # Re-run the stored champion fights and compare byte-for-byte
 python -m stealth_tactics replay-champion runs/net
 ```
@@ -212,8 +285,8 @@ A run directory holds `checkpoints/` (the last 3), `champion.json`,
 benchmark, held-out test, champion lineage) and `timing.jsonl`. Genomes carry
 `n_networks` (1 today; per-element / per-jet networks are deferred) and an
 interface fingerprint, so an incompatible file is refused, not misread.
-Fitness is still the placeholder; spec 7 owns it. See
-`docs/specs/06-neural-policy-neuroevolution.md`.
+Fitness is v1 (spec 7, `scenarios/fitness.yaml`). See
+`docs/specs/06-neural-policy-neuroevolution.md` and `docs/specs/07-fitness.md`.
 
 ## Tests
 
@@ -260,12 +333,13 @@ stealth_tactics/
   neuro/      # spec 6: MLP policy, network genome, novelty, mutation GA (evolve-net),
               # behaviour cloning (clone-hand), checkpoints, toy task
   presentation_runner.py  # run / export one presentation
-scenarios/    # default_4v3.yaml, cap_4v2.yaml
+scenarios/    # default_4v3.yaml (diamond), cap_4v2.yaml, blue_wall_30nm.yaml, fitness.yaml
 docs/design.md, docs/specs/01-sensors.md, docs/specs/02-track-sharing.md,
 docs/specs/02b-coast-and-lock.md, docs/specs/03a-missile-kinematics.md,
 docs/specs/03-missile-defense.md, docs/specs/04-red-presentations.md,
 docs/specs/05-network-interface.md,
-docs/specs/06-neural-policy-neuroevolution.md
+docs/specs/06-neural-policy-neuroevolution.md, docs/specs/07-fitness.md
+scripts/      # overnight.sh (play package) + example systemd unit
 tests/
 ```
 

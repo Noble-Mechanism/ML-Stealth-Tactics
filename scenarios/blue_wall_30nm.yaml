@@ -1,0 +1,13 @@
+# Default Blue start for the neural pipeline (Rusty 2026-09-26): a
+# line-abreast wall about 30 NM wide, 4 jets evenly spaced (10 NM apart),
+# all heading north. Elements: B1+B2 (west pair), B3+B4 (east pair).
+# anchor: centroid -> spec 4 presentations place Red relative to the wall's
+# centre (not B1). The old diamond is scenarios/default_4v3.yaml
+# (`--blue-start diamond`).
+name: blue_wall_30nm
+anchor: centroid
+blue:
+  - {id: B1, name: F-35-1, x: -27780, y: -42000, alt: 9000, heading_rad: 0.0, speed_mps: 260}
+  - {id: B2, name: F-35-2, x: -9260,  y: -42000, alt: 9000, heading_rad: 0.0, speed_mps: 260}
+  - {id: B3, name: F-35-3, x: 9260,   y: -42000, alt: 9000, heading_rad: 0.0, speed_mps: 260}
+  - {id: B4, name: F-35-4, x: 27780,  y: -42000, alt: 9000, heading_rad: 0.0, speed_mps: 260}

@@ -52,6 +52,10 @@ DOCTRINES = (SHOOT_ASSESS_SHOOT, SHOOT_SHOOT_ASSESS)
 MENUS_PATH = Path(__file__).with_name("presentation_menus.yaml")
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BLUE_SCENARIO = ROOT / "scenarios" / "default_4v3.yaml"
+# Blue start geometries (Rusty 2026-09-26: the neural pipeline defaults to the
+# 30 NM line-abreast wall; the spec 4 diamond stays available)
+BLUE_STARTS = {"wall": ROOT / "scenarios" / "blue_wall_30nm.yaml",
+               "diamond": DEFAULT_BLUE_SCENARIO}
 SLOT_SHAPES = {"single": [[0, 0]], "pair": [[0, 0], ["elem", 0]]}
 
 
@@ -78,6 +82,16 @@ class PresentationConfig:
 
 
 DEFAULT_PRESENTATION_CONFIG = PresentationConfig()
+
+
+def presentation_config(blue_start: str = "wall", n_red: int = 6,
+                        max_time_s: float = 360.0) -> "PresentationConfig":
+    """Presentation config for the neural pipeline (blue_start: wall | diamond)."""
+    if blue_start not in BLUE_STARTS:
+        raise ValueError(f"blue_start must be one of {sorted(BLUE_STARTS)}, got {blue_start!r}")
+    from dataclasses import replace as _replace
+    return _replace(DEFAULT_PRESENTATION_CONFIG, blue_scenario=str(BLUE_STARTS[blue_start]),
+                    n_red=int(n_red), max_time_s=float(max_time_s))
 
 
 # ---------------------------------------------------------------- menus --
@@ -254,6 +268,12 @@ def derive_sim_seed(presentation_seed: int) -> int:
 
 
 @lru_cache(maxsize=8)
+def _blue_anchor(path: str) -> str:
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    return str(data.get("anchor", "lead"))
+
+
+@lru_cache(maxsize=8)
 def _blue_block(path: str) -> Tuple[dict, ...]:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     return tuple(dict(b) for b in data.get("blue", []))
@@ -322,6 +342,9 @@ def sample_presentation(seed: int, cfg: PresentationConfig = DEFAULT_PRESENTATIO
     blue = [dict(b) for b in _blue_block(cfg.blue_scenario)]
     b0 = blue[0]
     bx, by = float(b0.get("x", 0.0)), float(b0.get("y", -40000.0))
+    if _blue_anchor(cfg.blue_scenario) == "centroid":     # e.g. the 30 NM wall
+        bx = sum(float(b.get("x", 0.0)) for b in blue) / len(blue)
+        by = sum(float(b.get("y", -40000.0)) for b in blue) / len(blue)
     bh = float(b0.get("heading_rad", 0.0))
     brg = bh + math.radians(az_deg)
     lx, ly = bx + range_nm * NM_M * math.sin(brg), by + range_nm * NM_M * math.cos(brg)

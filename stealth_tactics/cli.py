@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 
 import numpy as np
@@ -509,7 +510,8 @@ def cmd_clone_hand(args: argparse.Namespace) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     info = clone_hand(out / "clone", master_seed=args.seed, n_pres=args.presentations,
-                      n_gate=args.gate, epochs=args.epochs, workers=args.workers)
+                      n_gate=args.gate, epochs=args.epochs, workers=args.workers,
+                      blue_start=args.blue_start, n_red=args.n_red)
     g = info["gate"]
     print(f"clone: {info['n_samples']} samples, final loss {info['final_loss']:.4f}, "
           f"fit {info['fit_s']:.0f} s")
@@ -522,33 +524,28 @@ def cmd_clone_hand(args: argparse.Namespace) -> int:
 
 
 def cmd_evolve_net(args: argparse.Namespace) -> int:
-    from stealth_tactics.neuro.neuroga import NeuroConfig, NeuroGA
+    from stealth_tactics.neuro.neuroga import NeuroGA
+    from stealth_tactics.neuro.runconfig import config_from_args, ensure_clone
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    clone = args.clone
-    if args.init in ("mixed", "clone") and not clone:
-        from stealth_tactics.neuro.clone import clone_hand
-        cdir = out / "clone"
-        cdir.mkdir(exist_ok=True)
-        if not (cdir / "clone.json").exists():
-            info = clone_hand(cdir / "clone", master_seed=args.seed, workers=args.workers)
-            g = info["gate"]
-            print(f"clone gate: {100 * g['kills_ratio']:.0f} % of hand kills "
-                  f"({'PASS' if g['pass'] else 'FAIL'})")
-            if not g["pass"]:
-                return 1
-        clone = str(cdir / "clone")
-    cfg = NeuroConfig(population=args.pop, presentations=args.presentations,
-                      benchmark=args.benchmark, test_size=args.test_size, init=args.init,
-                      master_seed=args.seed, max_time_s=args.max_time,
-                      unit_swap=args.unit_swap, truncation=min(10, args.pop),
-                      n_clones=min(10, args.pop),
-                      arch={**NeuroConfig().arch, "encoder": args.encoder})
+    clone = ensure_clone(args, out)
+    cfg = config_from_args(args)
     ga = NeuroGA(cfg, out, workers=args.workers, clone_path=clone)
     rep = ga.run(args.gens, resume=args.resume)
     ch = rep["champion"]
     print(f"champion: id {ch['id']} ({ch['origin']}), generation {ch['gen']}, benchmark "
           f"{ch['benchmark_fitness']:.2f}, held-out test {ch['test_fitness']}")
+    return 0
+
+
+def cmd_overnight(args: argparse.Namespace) -> int:
+    from stealth_tactics.neuro.overnight import run_overnight
+    from stealth_tactics.neuro.runconfig import config_from_args, ensure_clone
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    clone = ensure_clone(args, out)
+    run_overnight(config_from_args(args), out, args.workers, clone, every=args.every,
+                  gens=args.gens)
     return 0
 
 
@@ -716,26 +713,26 @@ def main(argv: list[str] | None = None) -> int:
     p_ch.add_argument("--presentations", type=int, default=200)
     p_ch.add_argument("--gate", type=int, default=100)
     p_ch.add_argument("--epochs", type=int, default=60)
-    p_ch.add_argument("--workers", type=int, default=8)
+    p_ch.add_argument("--workers", type=int, default=os.cpu_count() or 8)
+    p_ch.add_argument("--blue-start", choices=["wall", "diamond"], default="wall")
+    p_ch.add_argument("--n-red", type=int, default=6)
     p_ch.add_argument("-o", "--out", default="runs/clone")
     p_ch.set_defaults(func=cmd_clone_hand)
 
     p_en = sub.add_parser("evolve-net", help="Spec 6: neuroevolution of the shared Blue network")
-    p_en.add_argument("--pop", type=int, default=50)
-    p_en.add_argument("--gens", type=int, default=10)
-    p_en.add_argument("--presentations", type=int, default=24)
-    p_en.add_argument("--benchmark", type=int, default=64)
-    p_en.add_argument("--test-size", type=int, default=256)
-    p_en.add_argument("--init", choices=["mixed", "random", "clone"], default="mixed")
-    p_en.add_argument("--clone", default=None, help="clone genome path (without suffix)")
-    p_en.add_argument("--encoder", choices=["flat", "set"], default="flat")
-    p_en.add_argument("--unit-swap", action="store_true")
-    p_en.add_argument("--seed", type=int, default=2026)
-    p_en.add_argument("--max-time", type=float, default=360.0)
-    p_en.add_argument("--workers", type=int, default=8)
+    from stealth_tactics.neuro.runconfig import add_run_args
+    add_run_args(p_en, 10)
     p_en.add_argument("--resume", action="store_true")
     p_en.add_argument("-o", "--out", default="runs/net")
     p_en.set_defaults(func=cmd_evolve_net)
+
+    p_on = sub.add_parser("overnight", help="Play package: evolve-net until stopped, "
+                                            "auto-resume, progress outputs every 10 generations")
+    add_run_args(p_on, None)
+    p_on.add_argument("--every", type=int, default=10,
+                      help="write progress outputs every N generations (default 10)")
+    p_on.add_argument("-o", "--out", default="runs/overnight")
+    p_on.set_defaults(func=cmd_overnight)
 
     p_od = sub.add_parser("obs-dump", help="Spec 5: print one jet's named observation")
     p_od.add_argument("--presentation", type=int, default=0,
@@ -764,7 +761,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command in ("sensors-table", "sample-presentation", "replay-champion",
                         "interface-adapter-test", "obs-dump", "network-smoke",
-                        "clone-hand", "evolve-net"):
+                        "clone-hand", "evolve-net", "overnight"):
         return args.func(args)
     if args.out is None:
         root = _project_root()

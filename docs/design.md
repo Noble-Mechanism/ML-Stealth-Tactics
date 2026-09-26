@@ -293,7 +293,18 @@ The genome GA (`ga/`) is untouched and stays the scripted baseline.
   workers give byte-identical results. Checkpoints (last 3 kept) hold the
   population, σ, lineage, archive, champion, hall of fame and history; resume
   is byte-identical and refuses a changed config or interface hash.
-- **Fitness:** today's placeholder (`fitness_of`); spec 7 owns fitness.
+- **Fitness:** spec 7 v1 (`stealth_tactics/fitness.py`, weights in
+  `scenarios/fitness.yaml`, part of the config hash): kill 100 × 6 / n_red,
+  loss −150 (−250 if egressing: heading > 120° off the nearest Red), +10 per
+  Blue alive at the 360 s cap, +25 per Red that leaves out of missiles, −2 per
+  shot; no shots and no kills → loss terms only; network fitness = mean −
+  0.5 × std. See `docs/specs/07-fitness.md`.
+- **Play package (2026-09-26):** default Blue start is the 30 NM
+  line-abreast wall (`scenarios/blue_wall_30nm.yaml`, Red placed relative to
+  the wall centre; `--blue-start diamond` keeps the spec 4 diamond); default
+  start population is all random (`--init mixed` for 10 clones + 40 random);
+  `overnight` / `scripts/overnight.sh` runs until stopped, auto-resumes and
+  writes progress outputs every 10 generations.
 
 ## Tactics genome (high-level)
 
@@ -380,6 +391,16 @@ trials use `seed_offset = gen * 100 + i`. The champion stores that
 `seed_offset` (and a deep-copied genome). The final ACMI recording re-runs with
 the **same** `seed_offset` so Bernoulli Pk / stochastic outcomes match the
 logged generation best — not a fresh `seed_offset=9999` re-roll.
+
+## Deferred (recorded 2026-09-26)
+
+- **Performance model:** the Blue jet's performance is generous for an F-35;
+  treat it as Raptor-like until a better model is chosen.
+- **Missile handoff:** limit it (perhaps one handoff, not seamless support by
+  any flightmate).
+- **Per-element / per-jet networks** (spec 6 E): the genome format carries
+  `n_networks` and the config the jet-to-network map; only 1 shared network
+  is accepted today.
 
 ## Deliberate non-goals (MVP)
 

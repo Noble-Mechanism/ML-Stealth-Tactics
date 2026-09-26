@@ -36,6 +36,9 @@ class BDRecorder:
         self.spread_n = 0
         self.closest = math.inf
         self.fire_rr: Dict[tuple, float] = {}
+        # spec 7: heading off the bearing to the nearest live Red at each jet's
+        # last whole-second sample (egress test for the loss weight)
+        self.last_off_deg: Dict[str, float] = {}
         self._next = 0.0
 
     def __call__(self, world) -> None:
@@ -67,11 +70,17 @@ class BDRecorder:
                 brg = math.atan2(r.state.x - b.state.x, r.state.y - b.state.y)
                 off = abs((brg - b.state.heading_rad + math.pi) % (2 * math.pi) - math.pi)
                 self.away += math.degrees(off) > AWAY_DEG
+                self.last_off_deg[b.id] = math.degrees(off)
         if len(blues) >= 2:
             ds = [math.dist((a.state.x, a.state.y), (c.state.x, c.state.y))
                   for i, a in enumerate(blues) for c in blues[i + 1:]]
             self.spread_sum += float(np.mean(ds))
             self.spread_n += 1
+
+    def egress_by_jet(self, off_deg: float) -> Dict[str, bool]:
+        """Blue jet id -> heading more than *off_deg* off the nearest live Red
+        at its last sample (all Blue ids present)."""
+        return {b: self.last_off_deg.get(b, 0.0) > off_deg for b in self.blue_ids}
 
     def raw(self, res) -> dict:
         blue = set(self.blue_ids)

@@ -22,6 +22,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from stealth_tactics.fitness import aggregate
+
 from .checkpoint import load_npz, save_npz, write_json
 from .evaluate import make_pool, member_job, pmap
 from .genome import (NetGenome, check_network_count, load_genome, mutate, save_genome,
@@ -57,7 +59,7 @@ class NeuroConfig:
     top_every: int = 5
     top_n: int = 3
     final_top: int = 5
-    init: str = "mixed"            # mixed | random | clone
+    init: str = "random"           # random (default, Rusty 2026-09-26) | mixed | clone
     n_clones: int = 10
     clone_sigma: float = 0.02
     unit_swap: bool = False
@@ -66,6 +68,11 @@ class NeuroConfig:
     jet_network: Tuple[int, ...] = (0, 0, 0, 0)    # jet slot -> network index
     master_seed: int = 2026
     max_time_s: float = 360.0
+    n_red: int = 6                 # Red flight size (spec 4 menus: 6 or 8)
+    blue_start: str = "wall"       # wall (30 NM line abreast) | diamond (spec 4)
+    # spec 7 fitness weights (scenarios/fitness.yaml unless given); part of the
+    # config hash, so resume refuses changed weights
+    fitness: dict = field(default_factory=lambda: _default_fitness())
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -84,9 +91,19 @@ class NeuroConfig:
             raise ValueError("jet_network must map all 4 jets to network 0 (one shared network)")
         if self.elites >= self.population or self.truncation > self.population:
             raise ValueError("elites / truncation larger than the population")
-        if self.init in ("mixed", "clone") and self.init == "mixed" \
+        from stealth_tactics.scenarios.presentation import BLUE_STARTS
+        if self.blue_start not in BLUE_STARTS:
+            raise ValueError(f"blue_start must be one of {sorted(BLUE_STARTS)}")
+        if self.init not in ("random", "mixed", "clone"):
+            raise ValueError("init must be random, mixed or clone")
+        if self.init == "mixed" \
                 and self.n_clones > self.population:
             raise ValueError("more clones than members")
+
+
+def _default_fitness() -> dict:
+    from stealth_tactics.fitness import load_weights
+    return load_weights()
 
 
 def config_hash(cfg: NeuroConfig, clone_sha: Optional[str]) -> str:
@@ -120,21 +137,24 @@ class SimTask:
     """Evaluates networks on spec 4 presentations through the spec 5 interface."""
 
     def __init__(self, cfg: NeuroConfig) -> None:
+        from stealth_tactics.scenarios.presentation import presentation_config
         self.cfg = cfg
+        self.pcfg = presentation_config(cfg.blue_start, cfg.n_red, cfg.max_time_s)
 
     def eval_set(self, gen: int) -> List[dict]:
         from stealth_tactics.scenarios.presentation import build_eval_set
         return [p.to_dict() for p in build_eval_set(self.cfg.master_seed, gen,
-                                                    self.cfg.presentations)]
+                                                    self.cfg.presentations, self.pcfg)]
 
     def bench_set(self) -> List[dict]:
         from stealth_tactics.scenarios.presentation import build_benchmark_set
-        return [p.to_dict() for p in build_benchmark_set(self.cfg.master_seed, self.cfg.benchmark)]
+        return [p.to_dict() for p in build_benchmark_set(self.cfg.master_seed, self.cfg.benchmark,
+                                                         self.pcfg)]
 
     def test_set(self) -> List[dict]:
-        from stealth_tactics.scenarios.presentation import _set, DEFAULT_PRESENTATION_CONFIG
+        from stealth_tactics.scenarios.presentation import _set
         return [p.to_dict() for p in _set(self.cfg.master_seed, TEST_SALT, 0, self.cfg.test_size,
-                                          DEFAULT_PRESENTATION_CONFIG)]
+                                          self.pcfg)]
 
     def evaluate(self, ga: "NeuroGA", genomes: List[NetGenome], pres: List[dict],
                  tag: str) -> List[MemberEval]:
@@ -142,7 +162,7 @@ class SimTask:
         path = ga.work / f"pop_{tag}.npz"
         save_npz(path, {"weights": np.stack([g.weights for g in genomes])})
         write_json(path.with_suffix(".json"), {"arch": arch.to_dict()})
-        jobs = [(str(path), i, p, self.cfg.max_time_s, False)
+        jobs = [(str(path), i, p, self.cfg.max_time_s, False, self.cfg.fitness)
                 for i in range(len(genomes)) for p in pres]
         out = pmap(ga.pool, member_job, jobs)
         path.unlink(missing_ok=True)
@@ -153,7 +173,7 @@ class SimTask:
             ch = out[i * n:(i + 1) * n]
             per = [float(f) for f, _, _, _ in ch]
             raws = [r for _, r, _, _ in ch]
-            res.append(MemberEval(float(np.mean(per)), per, descriptor(raws), mean_raw(raws),
+            res.append(MemberEval(aggregate(per, self.cfg.fitness), per, descriptor(raws), mean_raw(raws),
                                   [s for _, _, s, _ in ch]))
         return res
 
@@ -409,7 +429,8 @@ class NeuroGA:
         self.next_id = meta["next_id"]
 
     # ----------------------------------------------------------------- run --
-    def run(self, generations: int, resume: bool = False, finalize: bool = True) -> dict:
+    def run(self, generations: int, resume: bool = False, finalize: bool = True,
+            on_generation=None) -> dict:
         if resume and sorted(self.ckpt_dir.glob("ckpt_g*.json")):
             self.load_checkpoint()
             self.log(f"resumed at generation {self.gen}")
@@ -424,10 +445,12 @@ class NeuroGA:
                          f"{row['champion_bench']:8.2f} (g{row['champion_gen']})  best origin "
                          f"{row['best_origin']}  sigma {row['mean_sigma']:.4f}  hof "
                          f"{len(row['hof_cells'])}")
+                if on_generation is not None:
+                    on_generation(self, row)
             report = self.finalize() if finalize else {}
         finally:
             if self.pool is not None:
-                self.pool.shutdown()
+                self.pool.shutdown(wait=True, cancel_futures=True)
                 self.pool = None
         return report
 
@@ -466,7 +489,7 @@ class NeuroGA:
         # store champion + hall of fame (P)
         self._store(ch, self.run_dir, "champion", export_acmi)
         for cell in sorted(self.hof):
-            self._store(self.hof[cell], self.run_dir / "hall_of_fame" / cell, "champion", False)
+            self._store(self.hof[cell], self.run_dir / "hall_of_fame" / cell, "champion", export_acmi)
         report = {"champion": {"id": ch["genome"].lineage.get("id"),
                                "origin": ch["genome"].lineage.get("origin"), "gen": ch["gen"],
                                "fitness": ch["fitness"],
@@ -494,6 +517,8 @@ class NeuroGA:
                "benchmark_per_fight": e["benchmark_per_fight"],
                "test_fitness": e.get("test_fitness"), "bench_raw": e["bench_raw"],
                "max_time_s": self.cfg.max_time_s, "config_hash": self.hash,
+               "fitness_weights": self.cfg.fitness, "n_red": self.cfg.n_red,
+               "blue_start": self.cfg.blue_start,
                "best_index": best_k, "worst_index": worst_k,
                "weights": f"{name}_weights.npz"}
         write_json(out / f"{name}.json", doc)
@@ -517,7 +542,7 @@ def export_champion_acmis(out: Path, doc: dict, genome: NetGenome, arch: Arch,
     res = []
     for tag, k in (("best", doc["best_index"]), ("worst", doc["worst_index"])):
         f, _, _, rec = run_policy_fight(MLPPolicy(genome.weights, arch), doc["presentations"][k],
-                                        doc["max_time_s"], record=True)
+                                        doc["max_time_s"], True, doc.get("fitness_weights"))
         p = out / f"champion_{tag}{suffix}.txt.acmi"
         export_presentation_acmi(rec, p, title=f"Spec 6 network champion ({tag} fight, "
                                                f"stored presentation {k}, fitness {f:.1f})")
@@ -534,7 +559,8 @@ def replay_network_champion(run_dir, workers: int = 8) -> Tuple[bool, str]:
     doc = json.loads((run_dir / "champion.json").read_text(encoding="utf-8"))
     genome, arch, _ = load_genome(run_dir / "champion_weights")
     pol = MLPPolicy(genome.weights, arch)
-    jobs = [(pol, p, doc["max_time_s"], False) for p in doc["presentations"]]
+    jobs = [(pol, p, doc["max_time_s"], False, doc.get("fitness_weights"))
+            for p in doc["presentations"]]
     pool = make_pool(workers)
     try:
         out = pmap(pool, policy_job, jobs)
@@ -543,7 +569,8 @@ def replay_network_champion(run_dir, workers: int = 8) -> Tuple[bool, str]:
             pool.shutdown()
     per = [float(f) for f, _, _, _ in out]
     ok = per == doc["per_fight"]
-    lines = [f"Re-run on {len(per)} stored presentations: mean {float(np.mean(per))!r} vs stored "
+    lines = [f"Re-run on {len(per)} stored presentations: fitness "
+             f"{aggregate(per, doc.get('fitness_weights') or {})!r} vs stored "
              f"{doc['fitness']!r} -> {'IDENTICAL' if ok else 'MISMATCH'}"]
     same_all = True
     for (p, f), tag in zip(export_champion_acmis(run_dir, doc, genome, arch, "_replayed"),

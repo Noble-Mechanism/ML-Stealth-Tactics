@@ -1,0 +1,26 @@
+# Example systemd unit: runs the overnight evolution and restarts it after a
+# crash or reboot (it resumes from the latest checkpoint).
+# Install (edit User and the paths first):
+#   sudo cp scripts/stealth-overnight.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now stealth-overnight
+# Stop:    sudo systemctl stop stealth-overnight      (resume: start it again)
+# Logs:    journalctl -u stealth-overnight -f
+[Unit]
+Description=ML-Stealth-Tactics overnight neuroevolution
+After=network.target
+
+[Service]
+Type=simple
+User=rusty
+WorkingDirectory=/home/rusty/ML-Stealth-Tactics
+ExecStart=/home/rusty/ML-Stealth-Tactics/scripts/overnight.sh -o runs/overnight
+Restart=on-failure
+RestartSec=30
+# SIGTERM to the main process only; it stops the worker pool itself
+KillMode=mixed
+TimeoutStopSec=120
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
