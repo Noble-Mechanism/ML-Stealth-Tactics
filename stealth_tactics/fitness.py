@@ -22,7 +22,7 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "kill": 100.0, "kill_ref_red": 6, "blue_loss": -150.0, "blue_loss_egress": -250.0,
     "egress_off_deg": 120.0, "escape": 10.0, "escape_only_at_time_cap": True,
     "red_winchester_depart": 25.0, "shot": -2.0, "no_engagement_loss_only": True,
-    "std_coef": 0.5,
+    "no_engagement": -300.0, "std_coef": 0.2,
 }
 
 
@@ -86,7 +86,8 @@ def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping) 
          "egress_losses": w["blue_loss_egress"] * n_egress_loss,
          "escape": w["escape"] * escaped,
          "red_winchester_departs": w["red_winchester_depart"] * len(departed),
-         "shots": w["shot"] * shots}
+         "shots": w["shot"] * shots,
+         "no_engagement": 0.0 if engaged else float(w.get("no_engagement", 0.0))}
     if w["no_engagement_loss_only"] and not engaged:
         t.update(kills=0.0, escape=0.0, red_winchester_departs=0.0, shots=0.0)
     t["total"] = float(sum(t.values()))
@@ -104,4 +105,4 @@ def aggregate(per_fight: Sequence[float], w: Mapping) -> float:
     a = np.asarray(per_fight, dtype=float)
     if a.size == 0:
         return 0.0
-    return float(a.mean() - float(w.get("std_coef", 0.5)) * a.std())
+    return float(a.mean() - float(w.get("std_coef", 0.2)) * a.std())

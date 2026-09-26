@@ -10,7 +10,8 @@
 #   Red jets that left the fight out of missiles (Winchester) and were not
 #                  killed x red_winchester_depart (a quarter kill)
 #   Blue missiles fired x shot
-#   A fight with no Blue shots and no kills scores only the loss terms.
+#   A fight with no Blue shots and no kills scores the loss terms plus
+#                  no_engagement (v1.1 fix, Rusty 2026-09-26: closes the runaway hole)
 # Per network: mean over its presentations - std_coef x std (population std).
 kill: 100.0
 kill_ref_red: 6
@@ -25,4 +26,5 @@ escape_only_at_time_cap: true
 red_winchester_depart: 25.0
 shot: -2.0
 no_engagement_loss_only: true
-std_coef: 0.5
+no_engagement: -300.0
+std_coef: 0.2

@@ -297,8 +297,8 @@ The genome GA (`ga/`) is untouched and stays the scripted baseline.
   `scenarios/fitness.yaml`, part of the config hash): kill 100 × 6 / n_red,
   loss −150 (−250 if egressing: heading > 120° off the nearest Red), +10 per
   Blue alive at the 360 s cap, +25 per Red that leaves out of missiles, −2 per
-  shot; no shots and no kills → loss terms only; network fitness = mean −
-  0.5 × std. See `docs/specs/07-fitness.md`.
+  shot; no shots and no kills → loss terms − 300 (v1.1); network fitness =
+  mean − 0.2 × std (v1.1). See `docs/specs/07-fitness.md`.
 - **Play package (2026-09-26):** default Blue start is the 30 NM
   line-abreast wall (`scenarios/blue_wall_30nm.yaml`, Red placed relative to
   the wall centre; `--blue-start diamond` keeps the spec 4 diamond); default

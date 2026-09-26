@@ -60,24 +60,42 @@ def test_shot_term_and_total():
     assert t["total"] == 100.0 - 150.0 - 10.0
 
 
-def test_no_engagement_scores_only_losses():
+def test_no_engagement_penalty():
     evs = [{"type": "depart", "observer": "R1", "text": "DEPART (Winchester)"}]
     t = fight_terms(res(losses=["B1"], end="time_cap", events=evs), 6, eg("B1"), W)
-    assert not t["engaged"] and t["total"] == -250.0
-    t0 = fight_terms(res(end="time_cap"), 6, eg(), W)
-    assert t0["total"] == 0.0
+    assert not t["engaged"] and t["total"] == -250.0 - 300.0     # losses + penalty only
+    t0 = fight_terms(res(end="time_cap"), 6, eg(), W)             # 0 losses
+    assert t0["total"] == -300.0 and t0["no_engagement"] == -300.0
+    assert fight_terms(res(kills=1, shots=1), 6, eg(), W)["no_engagement"] == 0.0
+    assert fight_terms(res(end="time_cap"), 6, eg(), {**W, "no_engagement": 0.0})["total"] == 0.0
+
+
+def test_fighter_profile_beats_pure_runaway():
+    """Last demo's hall-of-fame fighter (~2.32 kills, 1.12 losses, ~14 shots per
+    fight) vs a pure runaway (never shoots, never dies), synthetic fights."""
+    fighter = []
+    for i in range(100):
+        k, l = [(2, 1), (3, 1), (2, 1), (3, 2), (2, 1)][i % 5] if i < 64 else [(2, 1), (2, 1), (3, 1), (2, 1)][i % 4]
+        fighter.append(fight_terms(res(kills=k, losses=["B1", "B2"][:l], shots=14), 6, eg(), W)["total"])
+    kills = np.mean([[(2, 1), (3, 1), (2, 1), (3, 2), (2, 1)][i % 5][0] if i < 64 else
+                     [(2, 1), (2, 1), (3, 1), (2, 1)][i % 4][0] for i in range(100)])
+    assert 2.2 < kills < 2.5
+    runaway = [fight_terms(res(end="time_cap"), 6, eg(), W)["total"]] * 100
+    assert aggregate(fighter, W) > aggregate(runaway, W)
+    assert aggregate(runaway, W) == -300.0
+    assert W["std_coef"] == 0.2
 
 
 def test_aggregation_mean_minus_half_std():
     per = [100.0, 0.0, 50.0, -50.0]
-    assert aggregate(per, W) == pytest.approx(np.mean(per) - 0.5 * np.std(per))
+    assert aggregate(per, W) == pytest.approx(np.mean(per) - 0.2 * np.std(per))
     assert aggregate(per, {**W, "std_coef": 0.0}) == pytest.approx(25.0)
     assert aggregate([7.0] * 5, W) == 7.0
 
 
 def test_weights_yaml_overrides_and_extensible(tmp_path):
     w = load_weights()
-    assert w == {**DEFAULT_WEIGHTS, **w} and w["kill"] == 100.0 and w["std_coef"] == 0.5
+    assert w == {**DEFAULT_WEIGHTS, **w} and w["kill"] == 100.0 and w["std_coef"] == 0.2 and w["no_engagement"] == -300.0
     f = tmp_path / "fw.yaml"
     f.write_text("blue_loss: -200\nmy_new_term: 3.5\n")
     w2 = load_weights(str(f), parse_overrides(["shot=-1", "escape_only_at_time_cap=false"]))

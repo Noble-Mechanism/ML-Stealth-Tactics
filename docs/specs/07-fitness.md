@@ -28,7 +28,8 @@ fitness. Code: `stealth_tactics/fitness.py`. Weights:
 | 4 | each Blue jet alive at the 360 s cap ("escaped", placeholder rule) | +10 | `escape`, `escape_only_at_time_cap` |
 | 5 | each Red jet that left the fight out of missiles and was not killed (a quarter kill) | +25 | `red_winchester_depart` |
 | 6 | each Blue missile fired | −2 | `shot` |
-| 7 | network fitness = mean over its presentations − 0.5 × std | 0.5 | `std_coef` |
+| 6b | a fight with no Blue shots and no kills (v1.1 fix) | −300 | `no_engagement` |
+| 7 | network fitness = mean over its presentations − 0.2 × std (v1.1; was 0.5) | 0.2 | `std_coef` |
 
 Definitions:
 - **Egress:** the dying Blue jet's heading was more than **120°** off the
@@ -43,9 +44,9 @@ Definitions:
 - **Red out-of-missiles departure:** a Red `depart` event whose reason is
   Winchester (since spec 4 L the only Red departure that ends a fight). A Red
   that departs and is then killed scores the kill only.
-- **No engagement:** a fight with no Blue shots and no kills scores only the
-  loss terms (no escape and no Red-departure credit). No extra penalty term
-  is added (`no_engagement_loss_only`).
+- **No engagement:** a fight with no Blue shots and no kills scores the loss
+  terms plus the **−300 no-engagement penalty** (v1.1). It gets no escape and
+  no Red-departure credit (`no_engagement_loss_only`).
 - **Aggregation:** population std (ddof 0) over the network's presentations
   in that generation. The benchmark and held-out test use the same formula.
 - Novelty behaviour measures are unchanged (spec 6 L).
@@ -56,7 +57,10 @@ Definitions:
 - one test per term: kill scaling with n_red, loss vs egress loss, escape
   only at the cap, Winchester departure (not for turn-away departures or
   jets killed later), shots and total, and the no-engagement rule;
-- aggregation (mean − 0.5 std, configurable coefficient);
+- aggregation (mean − 0.2 std, configurable coefficient);
+- v1.1: a no-engage fight with 0 losses scores −300, and the demo's
+  hall-of-fame fighter profile (~2.3 kills, ~1.1 losses, 14 shots,
+  synthetic fights) aggregates above a pure runaway;
 - YAML load, overrides and extra keys;
 - egress flag from the recorder;
 - changed weights change the config hash, and resume refuses.
@@ -75,3 +79,28 @@ Definitions:
   - a no-engagement penalty;
   - a smaller `std_coef`;
   - or counting escape credit only for fights with kills.
+
+## Fix approved by Rusty 2026-09-26 (fitness v1.1)
+
+**The runaway hole.** Under v1 a fight with no shots and no kills scored only
+its losses, which is 0 for a jet that simply turns away. Real fights have a
+large spread, and the −0.5 × std term punished that spread. So in the first
+demo a runaway (about 0 kills, about 0 losses) was champion at −1.7, above
+the best fighter (−22) and above the hand policy (−194).
+
+**The change** (`scenarios/fitness.yaml`, keys are configurable):
+- `no_engagement: -300`: a fight with no Blue shots and no kills scores the
+  loss terms plus −300 (a new term in `fight_terms`).
+- `std_coef: 0.2` (was 0.5).
+
+**Recomputed on the demo's saved per-fight results** (checkpoint g5, the
+64-presentation benchmark; no re-simulation; v1 values reproduce exactly):
+
+| network | v1 | v1.1 | no-engage fights | kills / losses per fight |
+|---|---|---|---|---|
+| champion runaway (id 108) | −1.7 | **−302.6** | 63 / 64 | 0.02 / 0.02 |
+| hall-of-fame fighter (id 158, r0_l2) | −22.0 | **+36.7** | 0 / 64 | 2.41 / 1.22 |
+| hall-of-fame r0_l1 (id 7) | −45.2 | −314.8 | 60 / 64 | 0.00 / 0.11 |
+
+The hand policy's per-fight results were not saved (only its averages), so
+its v1.1 score is not recomputed here.

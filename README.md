@@ -263,7 +263,8 @@ and checks they reproduce byte-for-byte, then re-exports the ACMIs):
 ```
 
 **Caveat:** the Blue performance model is generous for an F-35 (treat it as
-Raptor-like). Fitness weights are v1 (`docs/specs/07-fitness.md`).
+Raptor-like). Fitness weights are v1.1 (`docs/specs/07-fitness.md`; no-engagement
+penalty −300, network fitness = mean − 0.2 × std).
 
 ## Neural policy and neuroevolution (Spec 6)
 
@@ -285,7 +286,7 @@ A run directory holds `checkpoints/` (the last 3), `champion.json`,
 benchmark, held-out test, champion lineage) and `timing.jsonl`. Genomes carry
 `n_networks` (1 today; per-element / per-jet networks are deferred) and an
 interface fingerprint, so an incompatible file is refused, not misread.
-Fitness is v1 (spec 7, `scenarios/fitness.yaml`). See
+Fitness is v1.1 (spec 7, `scenarios/fitness.yaml`). See
 `docs/specs/06-neural-policy-neuroevolution.md` and `docs/specs/07-fitness.md`.
 
 ## Tests

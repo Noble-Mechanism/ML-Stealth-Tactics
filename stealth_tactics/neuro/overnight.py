@@ -35,7 +35,7 @@ def _chart(history, path: Path) -> bool:
     ax.plot(g, [r["mean_fitness"] for r in history], label="mean (eval set)")
     ax.plot(g, [r["champion_bench"] for r in history], "k:", label="champion (benchmark)")
     ax.set_xlabel("generation")
-    ax.set_ylabel("fitness v1 (mean - 0.5 std)")
+    ax.set_ylabel("fitness (mean - std_coef x std)")
     ax.grid(alpha=0.3)
     ax.legend()
     fig.tight_layout()
