@@ -248,6 +248,53 @@ The seam for the spec 6+ neural network. Spec 6 needs only `OBS_SPEC.size`
   three-layer sufficiency test (results in the spec's Implementation section).
 - **Cost:** +11 % per generation at 1 s (187 s vs 169 s on 8 workers).
 
+## Neural policy and neuroevolution (Spec 6 — see `docs/specs/06-neural-policy-neuroevolution.md`)
+
+Approved by Rusty 2026-09-26 (all decisions A–R). Code: `stealth_tactics/neuro/`.
+The genome GA (`ga/`) is untouched and stays the scripted baseline.
+
+- **Network** (`neuro/mlp.py`): one shared 231-64-64-13 tanh MLP for all four
+  jets (19,853 float64 weights, layer order `W1 b1 W2 b2 W3 b3`). Heads:
+  tanh for heading/altitude/speed and the fire/radar/pair bits, linear target
+  logits. A per-contact (set) encoder is built behind `--encoder set` (off).
+  `interface_fingerprint()` hashes the obs names/bounds, action layout and
+  decode ranges, the 1 s decision period and the 5 s radar dwell.
+- **Genome** (`neuro/genome.py`): `NetGenome(nets, sigma, lineage)`. `nets`
+  is a list of flat weight vectors; `n_networks` is written in every genome
+  and checkpoint (1 today). The jet-to-network map lives in `NeuroConfig`
+  (`jet_network = (0,0,0,0)`). Loaders refuse any count other than 1 and any
+  interface mismatch with a clear message (per-element / per-jet nets are
+  deferred). Files: deterministic `.npz` (fixed zip timestamps) + `.json`.
+- **Evolution** (`neuro/neuroga.py`): mutation-only GA. Pop 50 × 24
+  presentations (spec 4 `build_eval_set`, resampled each generation);
+  2 elites by fitness (re-scored); parents = top 10 by
+  rank(fitness) + 0.5 · rank(novelty); self-adaptive σ
+  (σ' = clip(σ·exp(0.2·N(0,1)), 0.002, 0.2), start 0.02); no crossover
+  (whole-unit swap behind `--unit-swap`, off). Stagnation: 25 generations with
+  no champion improvement boosts the novelty weight to 1.0 for 10 generations
+  and doubles σ. Initial population: 10 perturbed clones of `HandBlue` + 40
+  random (`--init mixed|random|clone`).
+- **Novelty** (`neuro/novelty.py`): 8 behaviour measures (radar-off share,
+  launch r/Rmax, shots, closest approach, altitude, away share, spread, first
+  shot time), measured on truth by a recorder wrapper (a descriptor only,
+  never a policy input); kNN (k = 10) over population + archive (2 random
+  members added per generation, cap 1,000).
+- **Champion / hall of fame:** top-1 on the 64-presentation benchmark each
+  generation, top-3 every 5th; champion = best benchmark score. Hall of fame
+  3 × 3 over radar-off share (1/3, 2/3) × launch r/Rmax (0.6, 0.85); networks
+  that never fired have no cell. At the end: the champion is re-checked
+  exactly on its stored presentations and the benchmark, and the top 5 +
+  hall of fame get a 256-presentation held-out test (separate seed salt).
+- **Cloning** (`neuro/clone.py`): logs `HandBlue` at 1 s on 200
+  presentations, fits with numpy Adam (60 epochs), gate ≥ 80 % of
+  `HandBlue`'s kills on 100 held-out presentations (separate seed salts).
+- **Determinism:** every random draw comes from `(master_seed, generation,
+  purpose, index)`; workers run with BLAS threads pinned to 1, so 1 and 8
+  workers give byte-identical results. Checkpoints (last 3 kept) hold the
+  population, σ, lineage, archive, champion, hall of fame and history; resume
+  is byte-identical and refuses a changed config or interface hash.
+- **Fitness:** today's placeholder (`fitness_of`); spec 7 owns fitness.
+
 ## Tactics genome (high-level)
 
 Not stick-and-throttle traces. Genes encode:
@@ -338,5 +385,5 @@ logged generation best — not a fresh `seed_offset=9999` re-roll.
 
 - No classified aircraft performance or RCS tables. Blue TacView `Name=F-35A` for DB matching only; params are generic LO placeholders (NOT real F-35 performance/RCS). Red remains `RedFighter`.
 - No AWACS/GCI, SAMs, link jamming, or network inputs. Buddy support exists only within the flight (Spec 2).
-- No continuous RL control or neural policies.
+- No continuous RL control. Neural policies are evolved (spec 6), not trained by RL.
 - TacView is optional for playback; tests never require it installed.

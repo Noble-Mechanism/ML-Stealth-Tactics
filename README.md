@@ -190,6 +190,31 @@ gates stay in the sim. A radar-off jet makes no radar tracks and is not heard
 by Red's RWR, but it can still fire on a wingman's fire-control track. See
 `docs/specs/05-network-interface.md`.
 
+## Neural policy and neuroevolution (Spec 6)
+
+```bash
+# Behaviour-clone HandBlue into the 231-64-64-13 network (gate: >= 80 % of its kills)
+python -m stealth_tactics clone-hand -o runs/clone
+# Evolve the network: 50 x 24 presentations, 10 clones + 40 random, novelty on
+python -m stealth_tactics evolve-net --pop 50 --presentations 24 --gens 10 \
+    --init mixed --clone runs/clone/clone.npz -o runs/net
+# Continue from the last checkpoint up to generation 20 in total (byte-identical)
+python -m stealth_tactics evolve-net --gens 20 --resume -o runs/net
+# Random-only control night (no human prior)
+python -m stealth_tactics evolve-net --init random -o runs/net_random
+# Re-run the stored champion fights and compare byte-for-byte
+python -m stealth_tactics replay-champion runs/net
+```
+
+A run directory holds `checkpoints/` (the last 3), `champion.json`,
+`champion_weights.npz/.json`, `champion_best.txt.acmi`,
+`champion_worst.txt.acmi`, `hall_of_fame/<cell>/`, `report.json` (history,
+benchmark, held-out test, champion lineage) and `timing.jsonl`. Genomes carry
+`n_networks` (1 today; per-element / per-jet networks are deferred) and an
+interface fingerprint, so an incompatible file is refused, not misread.
+Fitness is still the placeholder; spec 7 owns it. See
+`docs/specs/06-neural-policy-neuroevolution.md`.
+
 ## Tests
 
 ```bash
@@ -232,12 +257,15 @@ stealth_tactics/
   scenarios/  # YAML/JSON loader, presentation sampler + presentation_menus.yaml
   policy/     # spec 5 network interface: view (truth firewall), observation, action,
               # controller, adapters (scripted-via-interface, HandBlue, random MLP)
+  neuro/      # spec 6: MLP policy, network genome, novelty, mutation GA (evolve-net),
+              # behaviour cloning (clone-hand), checkpoints, toy task
   presentation_runner.py  # run / export one presentation
 scenarios/    # default_4v3.yaml, cap_4v2.yaml
 docs/design.md, docs/specs/01-sensors.md, docs/specs/02-track-sharing.md,
 docs/specs/02b-coast-and-lock.md, docs/specs/03a-missile-kinematics.md,
 docs/specs/03-missile-defense.md, docs/specs/04-red-presentations.md,
-docs/specs/05-network-interface.md
+docs/specs/05-network-interface.md,
+docs/specs/06-neural-policy-neuroevolution.md
 tests/
 ```
 

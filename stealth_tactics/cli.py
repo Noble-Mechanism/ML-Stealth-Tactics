@@ -475,6 +475,11 @@ def cmd_replay_champion(args: argparse.Namespace) -> int:
     from stealth_tactics.scenarios.presentation import DEFAULT_PRESENTATION_CONFIG
     run_dir = Path(args.run)
     champ = json.loads((run_dir / "champion.json").read_text(encoding="utf-8"))
+    if champ.get("kind") == "network":                    # spec 6 P
+        from stealth_tactics.neuro.neuroga import replay_network_champion
+        ok, text = replay_network_champion(run_dir, workers=args.workers)
+        print(text)
+        return 0 if ok else 1
     c = GAConfig(sim_max_time_s=args.max_time)
     pcfg = _replace(DEFAULT_PRESENTATION_CONFIG, max_time_s=args.max_time)
     jobs = [(champ["genome"], p, c, pcfg, False) for p in champ["presentations"]]
@@ -497,6 +502,54 @@ def cmd_replay_champion(args: argparse.Namespace) -> int:
     print(f"Recorded fight {k}: fitness {f!r} (stored {champ['per_fight'][k]!r}); ACMI "
           f"re-export {'byte-identical' if same else 'DIFFERS'} to {args.acmi}")
     return 0 if ok and same else 1
+
+
+def cmd_clone_hand(args: argparse.Namespace) -> int:
+    from stealth_tactics.neuro.clone import clone_hand
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    info = clone_hand(out / "clone", master_seed=args.seed, n_pres=args.presentations,
+                      n_gate=args.gate, epochs=args.epochs, workers=args.workers)
+    g = info["gate"]
+    print(f"clone: {info['n_samples']} samples, final loss {info['final_loss']:.4f}, "
+          f"fit {info['fit_s']:.0f} s")
+    if g:
+        print(f"gate on {g['n_gate']} held-out presentations: hand kills {g['hand']['kills']:.2f}, "
+              f"clone kills {g['clone']['kills']:.2f} -> {100 * g['kills_ratio']:.0f} % "
+              f"({'PASS' if g['pass'] else 'FAIL'}; needs >= 80 %)")
+    print(f"  -> {out / 'clone.npz'}, {out / 'clone.json'}")
+    return 0 if (not g or g["pass"]) else 1
+
+
+def cmd_evolve_net(args: argparse.Namespace) -> int:
+    from stealth_tactics.neuro.neuroga import NeuroConfig, NeuroGA
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    clone = args.clone
+    if args.init in ("mixed", "clone") and not clone:
+        from stealth_tactics.neuro.clone import clone_hand
+        cdir = out / "clone"
+        cdir.mkdir(exist_ok=True)
+        if not (cdir / "clone.json").exists():
+            info = clone_hand(cdir / "clone", master_seed=args.seed, workers=args.workers)
+            g = info["gate"]
+            print(f"clone gate: {100 * g['kills_ratio']:.0f} % of hand kills "
+                  f"({'PASS' if g['pass'] else 'FAIL'})")
+            if not g["pass"]:
+                return 1
+        clone = str(cdir / "clone")
+    cfg = NeuroConfig(population=args.pop, presentations=args.presentations,
+                      benchmark=args.benchmark, test_size=args.test_size, init=args.init,
+                      master_seed=args.seed, max_time_s=args.max_time,
+                      unit_swap=args.unit_swap, truncation=min(10, args.pop),
+                      n_clones=min(10, args.pop),
+                      arch={**NeuroConfig().arch, "encoder": args.encoder})
+    ga = NeuroGA(cfg, out, workers=args.workers, clone_path=clone)
+    rep = ga.run(args.gens, resume=args.resume)
+    ch = rep["champion"]
+    print(f"champion: id {ch['id']} ({ch['origin']}), generation {ch['gen']}, benchmark "
+          f"{ch['benchmark_fitness']:.2f}, held-out test {ch['test_fitness']}")
+    return 0
 
 
 def cmd_interface_adapter_test(args: argparse.Namespace) -> int:
@@ -658,6 +711,32 @@ def main(argv: list[str] | None = None) -> int:
     p_ia.add_argument("-o", "--out", default="/workspace/spec5_outputs")
     p_ia.set_defaults(func=cmd_interface_adapter_test)
 
+    p_ch = sub.add_parser("clone-hand", help="Spec 6 K: behaviour-clone HandBlue + quality gate")
+    p_ch.add_argument("--seed", type=int, default=2026)
+    p_ch.add_argument("--presentations", type=int, default=200)
+    p_ch.add_argument("--gate", type=int, default=100)
+    p_ch.add_argument("--epochs", type=int, default=60)
+    p_ch.add_argument("--workers", type=int, default=8)
+    p_ch.add_argument("-o", "--out", default="runs/clone")
+    p_ch.set_defaults(func=cmd_clone_hand)
+
+    p_en = sub.add_parser("evolve-net", help="Spec 6: neuroevolution of the shared Blue network")
+    p_en.add_argument("--pop", type=int, default=50)
+    p_en.add_argument("--gens", type=int, default=10)
+    p_en.add_argument("--presentations", type=int, default=24)
+    p_en.add_argument("--benchmark", type=int, default=64)
+    p_en.add_argument("--test-size", type=int, default=256)
+    p_en.add_argument("--init", choices=["mixed", "random", "clone"], default="mixed")
+    p_en.add_argument("--clone", default=None, help="clone genome path (without suffix)")
+    p_en.add_argument("--encoder", choices=["flat", "set"], default="flat")
+    p_en.add_argument("--unit-swap", action="store_true")
+    p_en.add_argument("--seed", type=int, default=2026)
+    p_en.add_argument("--max-time", type=float, default=360.0)
+    p_en.add_argument("--workers", type=int, default=8)
+    p_en.add_argument("--resume", action="store_true")
+    p_en.add_argument("-o", "--out", default="runs/net")
+    p_en.set_defaults(func=cmd_evolve_net)
+
     p_od = sub.add_parser("obs-dump", help="Spec 5: print one jet's named observation")
     p_od.add_argument("--presentation", type=int, default=0,
                       help="presentation seed (or index with --stats-index)")
@@ -684,7 +763,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command in ("sensors-table", "sample-presentation", "replay-champion",
-                        "interface-adapter-test", "obs-dump", "network-smoke"):
+                        "interface-adapter-test", "obs-dump", "network-smoke",
+                        "clone-hand", "evolve-net"):
         return args.func(args)
     if args.out is None:
         root = _project_root()
