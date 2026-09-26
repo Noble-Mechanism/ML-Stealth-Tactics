@@ -291,14 +291,19 @@ def tol_check(ref: List[dict], got: List[dict], rel: float, abs_: Optional[float
     return L
 
 
-def end_check(ref, got, tol=5) -> str:
+def end_check(ref, got, tol=5, info: bool = False) -> str:
+    """End-reason class counts. Since 2026-09-26 (Rusty) this is information
+    only for layer 2 (fight-to-fight noise, see layer2_noise_check.md): with
+    ``info`` it reports the largest class difference instead of PASS/FAIL."""
     ca = Counter(r["end_reason"] for r in ref)
     cb = Counter(r["end_reason"] for r in got)
     diffs = {k: cb[k] - ca[k] for k in END_REASONS}
+    counts = ", ".join(f"{END_ABBR[k]} {ca[k]}->{cb[k]}" for k in END_REASONS)
+    if info:
+        return (f"- End-reason counts (information only, not a pass criterion): {counts}; "
+                f"largest class difference {max(abs(v) for v in diffs.values())}")
     ok = all(abs(v) <= tol for v in diffs.values())
-    return (f"- End-reason counts (within ±{tol} per class): "
-            + ", ".join(f"{END_ABBR[k]} {ca[k]}->{cb[k]}" for k in END_REASONS)
-            + f" {'PASS' if ok else 'FAIL'}")
+    return f"- End-reason counts (within ±{tol} per class): {counts} {'PASS' if ok else 'FAIL'}"
 
 
 def format_report(runs: Dict[str, List[dict]], l1: List[dict]) -> str:
@@ -323,9 +328,10 @@ def format_report(runs: Dict[str, List[dict]], l1: List[dict]) -> str:
           f"- Fire targets missing from the jet's contact slots: {miss} (must be 0)",
           f"- Commands encoded: {enc}; not reproducible bit-exactly by the decoder: {inx} "
           f"({100 * inx / max(enc, 1):.1f} %; all within 8 ulp, see spec 5 Implementation)",
-          "", "## Layer 2 (1 s hold) vs scripted: ±10 % or ±0.2 absolute", ""]
+          "", "## Layer 2 (1 s hold) vs scripted: kills, losses, shots within ±10 % or ±0.2 "
+          "absolute (pass criteria); end reasons reported for information", ""]
     L += tol_check(sc, runs["layer2"], 0.10, 0.2)
-    L.append(end_check(sc, runs["layer2"]))
+    L.append(end_check(sc, runs["layer2"], info=True))
     L += ["", "## Layer 3 (HandBlue, obs only) vs scripted: ±15 %", ""]
     L += tol_check(sc, runs["hand"], 0.15, None)
     ob = [r for v in ("hand", "silent") for r in runs[v]]
@@ -490,16 +496,16 @@ def layer2_noise_check(runs: Dict[str, List[dict]], workers: int = 8,
          row("Layer 2 replicate: 1 s hold, decisions half a period later", sh), "",
          f"Fights whose end reason differs from scripted: layer 2 {flips}/{n}, replicate "
          f"{flips_sh}/{n}.", "", "Replicate vs scripted:"]
-    L += tol_check(runs["scripted"], sh, 0.10, 0.2) + [end_check(runs["scripted"], sh)]
+    L += tol_check(runs["scripted"], sh, 0.10, 0.2) + [end_check(runs["scripted"], sh, info=True)]
     L += ["", "Layer 2 vs its own replicate (same treatment):",
-          end_check(runs["layer2"], sh), "",
+          end_check(runs["layer2"], sh, info=True), "",
           f"## Next {n_extra} stats seeds (fresh sample)", "", HEADER]
     for v, lab in (("scripted", LABELS["scripted"]), ("layer2", LABELS["layer2"]),
                    ("layer2_shift", "Layer 2 replicate (half-period phase)")):
         L.append(row(lab, B[v]))
-    tol = round(5 * n_extra / 100)
-    L += ["", f"Layer 2 vs scripted (end-reason tolerance scaled to ±{tol} for n = {n_extra}):"]
-    L += tol_check(B["scripted"], B["layer2"], 0.10, 0.2) + [end_check(B["scripted"], B["layer2"], tol)]
+    L += ["", f"Layer 2 vs scripted (n = {n_extra}):"]
+    L += tol_check(B["scripted"], B["layer2"], 0.10, 0.2) + [end_check(B["scripted"], B["layer2"],
+                                                                       info=True)]
     return "\n".join(L)
 
 

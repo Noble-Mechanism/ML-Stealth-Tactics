@@ -576,7 +576,8 @@ Blue uses truth (fact 1):
 2. **Decision-rate effect (near-identical).** The same wrapped policy at
    1 s hold on the 100 spec 4 stats seeds. Tolerance:
    - mean Blue kills and losses within ±10 % (or ±0.2 absolute);
-   - end-reason counts within ±5 per class.
+   - end-reason counts within ±5 per class. *(Changed 2026-09-26, approved by
+     Rusty: now information only, see "Follow-up changes".)*
 3. **Perceived-only hand policy (sufficiency).** `HandBlue` is written **only**
    on the observation vector:
    - target = nearest shot-ready slot, else slot 0;
@@ -819,7 +820,8 @@ Built as decided in **R**; the GA, genome and fitness are untouched.
   Nothing else in the file differs. Three event logs differ only in the 16th
   digit of a float field. This was **not** loosened. Two options for Rusty:
   normalise `-0.0` to `0.0` in the exporter (which makes 20/20), or accept
-  "outcome-identical, ulp-level" as the layer 1 criterion.
+  "outcome-identical, ulp-level" as the layer 1 criterion. **Resolved:** Rusty
+  chose the exporter fix; now 20/20 (see "Follow-up changes").
 - **Layer 2 (±10 % or ±0.2): kills, losses and shots PASS.** The end-reason
   criterion (±5 per class) **FAILS** on the 100 seeds: cap 25 → 36, Bdead 58 → 52.
   Investigation (`layer2_noise_check.md`) points to noise, not a decision-rate
@@ -854,3 +856,38 @@ Built as decided in **R**; the GA, genome and fitness are untouched.
   | random MLP at 0.5 s | 218 s | 165 |
 
   Serial cost is 1.00 / 1.08 / 1.30 s per engagement.
+
+## Follow-up changes (approved by Rusty 2026-09-26)
+
+1. **ACMI negative zero** *(approved by Rusty 2026-09-26)*.
+   - The change: `acmi/exporter.py` writes a negative zero (`-0`, `-0.0`,
+     `-0.00` …) as a positive zero in every numeric field. Object-removal lines
+     (`-<hex id>`), ordinary negative numbers and dates are untouched.
+   - Why: a value like −1e-17 rounds to `-0.0` at ACMI precision. That is a
+     float rounding artifact, not a difference in the fight. It was the only
+     thing separating layer 1 seed 830255951060554192 from the direct run
+     (117 lines of one Red missile's pitch).
+   - Result: layer 1 is now **20/20 byte-identical**, with 20/20 identical
+     `SimResult` and 0 fire-target misses. The tests run layer 1 on stats seed
+     indices 0, 1 and 10 (10 is the formerly failing seed), plus a unit test
+     of the normalisation.
+   - Other files: the legacy exact-match regression is a sim fingerprint and
+     still passes. No golden file needed a change. The committed
+     `runs/demo/best_engagement.txt.acmi` contains no negative zero. The four
+     spec 4 replays, regenerated, differ from the old files only by `-0.0` →
+     `0.0` (A 382 lines, B 62, C 1, D 36; 0 lines after normalising). They were
+     replaced in `/workspace/spec4_outputs/`.
+2. **Layer 2 end reasons are information only** *(approved by Rusty
+   2026-09-26)*.
+   - The change: the pass criteria for layer 2 are mean Blue kills, losses and
+     shots within ±10 % (or ±0.2 absolute). End-reason counts are still
+     reported, with the largest class difference, but no longer pass or fail.
+   - Why (`/workspace/spec5_outputs/layer2_noise_check.md`):
+     - on the same 100 seeds, a statistically identical replicate (the same
+       1 s hold, decisions half a period later) differs from layer 2 by 10 in
+       the cap class;
+     - 35/100 fights change end reason under either variant;
+     - on 300 fresh seeds the cap difference reverses sign (81 → 75).
+
+     End-reason classes at n = 100 sit inside the fight-to-fight noise, while
+     kills, losses and shots agree within 2 %.

@@ -6,6 +6,7 @@ Spec: https://raia-software-inc.gitbook.io/tacview/technical-documentation/acmi-
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -20,6 +21,18 @@ def _stable_hex_id(uid: str, prefix: int = 0x100) -> str:
     for ch in uid:
         h = (h * 131 + ord(ch)) & 0xFFFFFF
     return f"{prefix + h:X}"
+
+
+_NEG_ZERO = re.compile(r"(?<![\w.])-(0(?:\.0+)?)(?![\w.])")
+
+
+def _no_neg_zero(line: str) -> str:
+    """Write a negative zero (e.g. ``-0.0`` from rounding -1e-17) as ``0.0`` in
+    every numeric field (spec 5 follow-up, approved 2026-09-26). Object-removal
+    lines (``-<hex id>``) are left alone."""
+    if line.startswith("-") or "-0" not in line:
+        return line
+    return _NEG_ZERO.sub(r"\1", line)
 
 
 def _escape(text: str) -> str:
@@ -253,6 +266,7 @@ class ACMIExporter:
                         bookmarked.add(key)
                     lines.append(f"0,Event={kind}|{ids}|{_escape(text)}")
 
+        lines = [_no_neg_zero(ln) for ln in lines]
         out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return out_path
 

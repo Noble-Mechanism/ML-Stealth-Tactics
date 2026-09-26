@@ -670,7 +670,7 @@ def test_default_radar_on_unchanged():
 
 
 # ------------------------------------------------------------ adapters ----
-@pytest.mark.parametrize("i", [0, 1, 2])
+@pytest.mark.parametrize("i", [0, 1, 10])
 def test_layer1_scripted_through_interface_identical(i):
     """Layer 1: 0.5 s encode -> decode of the script reproduces the direct
     fight (ACMI bytes, SimResult, events) with 0 fire-target misses."""
@@ -687,3 +687,15 @@ def test_hand_policy_uses_obs_only():
     out = pol(obs)
     assert out.shape == (2, 13) and np.isfinite(out).all()
     assert (out[:, A.target0 + A.k] == 1.0).all()          # nothing seen -> none
+
+
+def test_acmi_negative_zero_normalized():
+    """Spec 5 follow-up (Rusty 2026-09-26): -0.0 is written as 0.0 in every
+    numeric field; object removals and ordinary negatives are untouched.
+    Seed index 10 above is the fight whose ACMI differed only by -0.0."""
+    from stealth_tactics.acmi.exporter import _no_neg_zero as f
+    assert f("1B,T=-115.045491|35.087479|2656.0|0.0|-0.0|158.1") == \
+        "1B,T=-115.045491|35.087479|2656.0|0.0|0.0|158.1"
+    assert f("-0A01") == "-0A01" and f("-1B19E4") == "-1B19E4"
+    assert f("a=-0.00,b=-0.5,c=-0,d=-0.01,e=-01") == "a=0.00,b=-0.5,c=0,d=-0.01,e=-01"
+    assert f("0,ReferenceTime=2026-01-01T00:00:00Z") == "0,ReferenceTime=2026-01-01T00:00:00Z"
