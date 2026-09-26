@@ -43,6 +43,13 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     def on_gen(gen: int, evaluated: list) -> None:
         best = evaluated[0]
         mean = sum(e.fitness for e in evaluated) / len(evaluated)
+        if best.per_fight is not None:          # spec 4: mean over N presentations
+            bf = best.benchmark_fitness
+            print(f"Gen {gen:3d}  best={best.fitness:7.2f}  mean={mean:7.2f}  "
+                  f"(best per-fight {min(best.per_fight):.0f}..{max(best.per_fight):.0f} "
+                  f"over {len(best.per_fight)} presentations)"
+                  + (f"  benchmark={bf:7.2f}" if bf is not None else ""))
+            return
         print(
             f"Gen {gen:3d}  best={best.fitness:7.2f}  mean={mean:7.2f}  "
             f"kills={best.sim.blue_kills}  losses={best.sim.red_kills}  "
@@ -56,6 +63,9 @@ def cmd_evolve(args: argparse.Namespace) -> int:
         sim_dt=args.dt,
         sim_max_time_s=args.max_time,
         elite_count=max(1, args.pop // 10),
+        presentations_per_gen=args.presentations,
+        benchmark_size=args.benchmark,
+        workers=args.workers,
         **_spec3_ga_kwargs(args),
     )
     ga = GeneticAlgorithm(scenario, ga_cfg, on_generation=on_gen)
@@ -72,9 +82,31 @@ def cmd_evolve(args: argparse.Namespace) -> int:
     # ACMI
     acmi_name = args.acmi or "best_engagement.txt.acmi"
     acmi_path = out_dir / acmi_name
-    exporter = ACMIExporter(title=f"{scenario.name} — best genome")
-    exporter.export(best.sim.frames, acmi_path)
+    if best.presentations:
+        # Spec 4: champion + the exact presentations its fitness came from
+        from stealth_tactics.presentation_runner import export_presentation_acmi
+        champ = {"genome": best.genome.to_dict(), "fitness": best.fitness,
+                 "benchmark_fitness": best.benchmark_fitness, "per_fight": best.per_fight,
+                 "acmi_index": best.acmi_index, "presentations": best.presentations}
+        (out_dir / "champion.json").write_text(json.dumps(champ, indent=1), encoding="utf-8")
+        export_presentation_acmi(best.sim, acmi_path,
+                                 title=f"Spec 4 champion, presentation {best.acmi_index}")
+        print(f"  champion + stored presentations -> {out_dir / 'champion.json'}")
+    else:
+        exporter = ACMIExporter(title=f"{scenario.name} — best genome")
+        exporter.export(best.sim.frames, acmi_path)
 
+    if best.presentations:
+        print(f"\nChampion: mean fitness {best.fitness:.2f} over its {len(best.presentations)} "
+              f"stored presentations, benchmark {best.benchmark_fitness}; re-run from the "
+              f"stored presentations reproduced both exactly (checked in GA.run).")
+        print(f"Recorded fight: presentation {best.acmi_index} "
+              f"(seed {best.presentations[best.acmi_index]['presentation_seed']}), fitness "
+              f"{best.per_fight[best.acmi_index]:.2f} (matches stored per-fight value), "
+              f"kills={best.sim.blue_kills} losses={best.sim.red_kills} "
+              f"end={best.sim.end_reason} time={best.sim.time_s:.1f}s")
+        print(f"  genome -> {genome_path}\n  ACMI   -> {acmi_path}")
+        return 0
     evo_fit = ga.evolution_best_fitness
     if evo_fit is None:
         evo_fit = best.fitness
@@ -396,6 +428,83 @@ def cmd_defense_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sample_presentation(args: argparse.Namespace) -> int:
+    """Spec 4: print (and optionally save) one sampled presentation."""
+    from stealth_tactics.scenarios.presentation import sample_presentation
+    p = sample_presentation(args.seed)
+    print(p.summary())
+    if args.json:
+        Path(args.json).write_text(p.to_json(), encoding="utf-8")
+        print(f"JSON -> {args.json}")
+    return 0
+
+
+def cmd_presentation_stats(args: argparse.Namespace) -> int:
+    """Spec 4 stats over random presentations + runtime / cost estimate."""
+    import time as _time
+    from stealth_tactics.analysis.presentation_stats import (run_stats, format_stats,
+                                                             timing, format_timing)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    parts = []
+    for bt in ((False, True) if args.blue_test else (False,)):
+        t0 = _time.perf_counter()
+        runs = run_stats(args.n, blue_test=bt, workers=args.workers)
+        wall = _time.perf_counter() - t0
+        title = (f"Spec 4 presentation stats: {args.n} random presentations (6 Red), default "
+                 f"genome{' + Blue test reaction' if bt else ''}, 360 s cap, spec 4 early end. "
+                 f"Wall {wall:.0f} s.")
+        parts.append(format_stats(runs, title))
+        (out_dir / f"presentation_stats_runs{'_bluetest' if bt else ''}.json").write_text(
+            json.dumps(runs, indent=1), encoding="utf-8")
+    text = "\n\n".join(parts)
+    if args.timing:
+        t = timing(workers=args.workers or 8)
+        text += "\n\nRuntime and cost\n" + format_timing(t)
+    print(text)
+    (out_dir / "presentation_stats.txt").write_text(text + "\n", encoding="utf-8")
+    return 0
+
+
+def cmd_replay_champion(args: argparse.Namespace) -> int:
+    """Spec 4: re-evaluate a champion.json on its stored presentations (fresh
+    process, no re-sampling) and re-export its ACMI; compare with the saved one."""
+    from dataclasses import replace as _replace
+    from stealth_tactics.ga.evolution import GAConfig, _presentation_job
+    from stealth_tactics.presentation_runner import export_presentation_acmi
+    from stealth_tactics.scenarios.presentation import DEFAULT_PRESENTATION_CONFIG
+    run_dir = Path(args.run)
+    champ = json.loads((run_dir / "champion.json").read_text(encoding="utf-8"))
+    c = GAConfig(sim_max_time_s=args.max_time)
+    pcfg = _replace(DEFAULT_PRESENTATION_CONFIG, max_time_s=args.max_time)
+    jobs = [(champ["genome"], p, c, pcfg, False) for p in champ["presentations"]]
+    if args.workers > 1:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=args.workers) as ex:
+            out = list(ex.map(_presentation_job, jobs))
+    else:
+        out = [_presentation_job(j) for j in jobs]
+    per = [f for f, _ in out]
+    mean = float(np.mean(per))
+    ok = per == champ["per_fight"] and mean == champ["fitness"]
+    print(f"Re-run on {len(per)} stored presentations: mean fitness {mean!r} vs stored "
+          f"{champ['fitness']!r} -> {'IDENTICAL' if ok else 'MISMATCH'}")
+    k = champ["acmi_index"]
+    f, rec = _presentation_job((champ["genome"], champ["presentations"][k], c, pcfg, True))
+    new = run_dir / "replayed_best_engagement.txt.acmi"
+    export_presentation_acmi(rec, new, title=f"Spec 4 champion, presentation {k}")
+    same = new.read_bytes() == (run_dir / args.acmi).read_bytes()
+    print(f"Recorded fight {k}: fitness {f!r} (stored {champ['per_fight'][k]!r}); ACMI "
+          f"re-export {'byte-identical' if same else 'DIFFERS'} to {args.acmi}")
+    return 0 if ok and same else 1
+
+
+def cmd_presentation_replays(args: argparse.Namespace) -> int:
+    from stealth_tactics.analysis.presentation_replays import make_replays
+    print(make_replays(Path(args.out)))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="stealth_tactics",
@@ -409,7 +518,13 @@ def main(argv: list[str] | None = None) -> int:
     p_ev.add_argument("-g", "--gens", type=int, default=8)
     p_ev.add_argument("--seed", type=int, default=42)
     p_ev.add_argument("--dt", type=float, default=0.5)
-    p_ev.add_argument("--max-time", type=float, default=240.0)
+    p_ev.add_argument("--max-time", type=float, default=360.0)
+    p_ev.add_argument("--presentations", type=int, default=0,
+                      help="Spec 4: evaluate on N random presentations per generation "
+                           "(0 = scenario YAML; 24 = one maneuver x band x doctrine crossing)")
+    p_ev.add_argument("--benchmark", type=int, default=64,
+                      help="Spec 4: fixed benchmark-set size (0 = off)")
+    p_ev.add_argument("--workers", type=int, default=1)
     p_ev.add_argument("-o", "--out", default=None,
                       help="Output directory (default: runs/demo)")
     p_ev.add_argument("--acmi", default="best_engagement.txt.acmi")
@@ -419,7 +534,7 @@ def main(argv: list[str] | None = None) -> int:
     p_sim.add_argument("-s", "--scenario", default="default_4v3.yaml")
     p_sim.add_argument("--genome", default=None)
     p_sim.add_argument("--seed", type=int, default=42)
-    p_sim.add_argument("--max-time", type=float, default=240.0)
+    p_sim.add_argument("--max-time", type=float, default=360.0)
     p_sim.add_argument("-o", "--out", default=None)
     p_sim.add_argument("--acmi", default="sim.txt.acmi")
     p_sim.set_defaults(func=cmd_simulate)
@@ -486,6 +601,34 @@ def main(argv: list[str] | None = None) -> int:
     p_ds.add_argument("-o", "--out", default=None)
     p_ds.set_defaults(func=cmd_defense_stats)
 
+    p_sp = sub.add_parser("sample-presentation", help="Spec 4: print one sampled presentation")
+    p_sp.add_argument("--seed", type=int, default=0)
+    p_sp.add_argument("--json", default="")
+    p_sp.set_defaults(func=cmd_sample_presentation)
+
+    p_ps = sub.add_parser("presentation-stats",
+                          help="Spec 4 stats over random presentations + runtime estimate")
+    p_ps.add_argument("-n", type=int, default=100)
+    p_ps.add_argument("--workers", type=int, default=None)
+    p_ps.add_argument("--blue-test", action="store_true",
+                      help="also run with the Blue scripted test reaction")
+    p_ps.add_argument("--timing", action="store_true")
+    p_ps.add_argument("-o", "--out", default=None)
+    p_ps.set_defaults(func=cmd_presentation_stats)
+
+    p_rc = sub.add_parser("replay-champion",
+                          help="Spec 4: reproduce a champion from its stored presentations")
+    p_rc.add_argument("run", help="evolve output dir containing champion.json")
+    p_rc.add_argument("--max-time", type=float, default=360.0)
+    p_rc.add_argument("--workers", type=int, default=8)
+    p_rc.add_argument("--acmi", default="best_engagement.txt.acmi")
+    p_rc.set_defaults(func=cmd_replay_champion)
+
+    p_pr = sub.add_parser("presentation-replays",
+                          help="Spec 4 TacView replays, one per pre-planned maneuver type")
+    p_pr.add_argument("-o", "--out", default=None)
+    p_pr.set_defaults(func=cmd_presentation_replays)
+
     for p in (p_ev, p_sim):
         p.add_argument("--red-aggressiveness", type=float, default=None,
                        help="Spec 3: Red flight aggressiveness a in [0,1] (default: scenario)")
@@ -497,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
                        choices=["shoot_assess_shoot", "shoot_shoot_assess", "legacy"])
 
     args = parser.parse_args(argv)
-    if args.command == "sensors-table":
+    if args.command in ("sensors-table", "sample-presentation", "replay-champion"):
         return args.func(args)
     if args.out is None:
         root = _project_root()
@@ -506,7 +649,9 @@ def main(argv: list[str] | None = None) -> int:
                                "datalink-replays": "artifacts/spec2",
                                "missile-sweep": "artifacts/spec3a",
                                "defense-replays": "artifacts/spec3",
-                               "defense-stats": "artifacts/spec3"}.get(args.command,
+                               "defense-stats": "artifacts/spec3",
+                               "presentation-stats": "artifacts/spec4",
+                               "presentation-replays": "artifacts/spec4"}.get(args.command,
                                                                        "artifacts"))
     return args.func(args)
 

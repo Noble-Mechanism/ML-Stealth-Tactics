@@ -197,6 +197,17 @@ class RedDefense:
             return _wrap_pi(jd.threat_brg + math.pi)
         return ac.state.heading_rad
 
+    def force_depart(self, world, ac: Aircraft, reason: str) -> None:
+        """Spec 4 L: leave the fight for good (D9 departure) for a non-threat
+        reason (e.g. Winchester). Not counted as a turn-away."""
+        jd = self.jet(ac)
+        if jd.state == DEPARTED:
+            return
+        jd.state = DEPARTED
+        ac.departed = True
+        ac.defense_state = DEPARTED
+        self._log(world, ac, jd, "depart", f"DEPART ({reason})", reason=reason)
+
     # --------------------------------------------------------------- step --
     def step(self, world, ac: Aircraft):
         """Returns (ManeuverCmd or None for the normal HOT intercept, may_shoot)."""

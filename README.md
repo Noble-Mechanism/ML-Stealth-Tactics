@@ -4,8 +4,10 @@ Simulation testbed for **novel fighter tactics** evolved with a **genetic algori
 with **TacView ACMI 2.2** playback.
 
 MVP: GA evolves high-level tactics for a **4-ship of generic stealth fighters (Blue)**
-versus a **fixed bandit presentation (Red)**. The best engagement exports as
-`.txt.acmi` openable in TacView.
+versus **randomized Red presentations** (spec 4: a 6-ship Red flight in a random
+formation, geometry, aggressiveness and doctrine, with one pre-planned maneuver)
+or a fixed scenario YAML. The best engagement exports as `.txt.acmi` openable in
+TacView.
 
 > Blue ACMI `Name=F-35A` (TacView Lightning II DB match); ship callsigns (`F-35-1`…) go in `Pilot=`. Performance/RCS remain unclassified generic LO placeholders — not real F-35 data. Red remains `RedFighter`.
 
@@ -41,6 +43,21 @@ Single engagement with default (or saved) genome:
 ```bash
 python -m stealth_tactics simulate -s default_4v3.yaml -o artifacts
 ```
+
+Spec 4: evolve against randomized presentations (24 per generation, one per
+maneuver x aggressiveness band x doctrine cell, resampled each generation; a fixed
+64-presentation benchmark picks the champion):
+
+```bash
+python -m stealth_tactics evolve --pop 50 --gens 100 --seed 42 \
+  --presentations 24 --benchmark 64 --workers 8 --out runs/spec4
+# reproduce the champion from its stored presentations (fresh process) and
+# check the ACMI re-export is byte-identical
+python -m stealth_tactics replay-champion runs/spec4
+```
+
+The run directory also gets `champion.json` (genome, fitness, per-fight scores
+and every stored presentation). The hard sim cap is now **360 s** (`--max-time`).
 
 Spec 3 options for `evolve` and `simulate`: `--red-aggressiveness A` (0–1, default
 0.5 or the scenario's `red_aggressiveness`), `--no-red-defense` (old pure-pursuit
@@ -117,6 +134,33 @@ shoot-shoot-assess (a pair per contact, 3 s apart), and can engage several
 contacts at once. See
 `docs/specs/03-missile-defense.md`.
 
+## Red presentations (Spec 4)
+
+```bash
+python -m stealth_tactics sample-presentation --seed 7 --json p7.json
+# 100 random presentations with the scripted (default-genome) Blue, with and
+# without the Blue test reaction, + runtime and per-generation cost estimate
+python -m stealth_tactics presentation-stats -n 100 --blue-test --timing -o spec4_outputs
+# One TacView replay + text timeline per pre-planned maneuver (split / pump /
+# low-high split / altitude change), each a different formation
+python -m stealth_tactics presentation-replays -o spec4_outputs
+```
+
+A presentation is one 6-ship Red flight (`PresentationConfig.n_red`; 8-ship
+formations are already in the menu) at 40-60 NM, up to 40 deg off Blue's nose,
+6-12 km base altitude, in a formation from the data file
+`stealth_tactics/scenarios/presentation_menus.yaml` (wall, box, ladder,
+echelon, vic, champagne; every formation fits a 25 x 25 NM box). It draws the
+flight's aggressiveness (band, then uniform inside it), SAS/SSA 50/50 and exactly
+one pre-planned maneuver on a range trigger (30-45 NM). Red holds formation and
+its assigned altitude until break-up, the defense state machine always wins over
+the maneuver, and a Red jet out of missiles leaves the fight. Fights end early when
+one side is dead (missiles in the air still resolve), both sides are out of
+missiles with nothing in the air, or every live Red has left. The presentation
+stores every drawn value, and its seed also sets the sim's noise seed, so the
+same genome against the same presentation replays byte-for-byte. See
+`docs/specs/04-red-presentations.md`.
+
 ## Tests
 
 ```bash
@@ -152,14 +196,16 @@ stealth_tactics/
               # weapons, missile_kinematics (fly-out), missile_envelope (Rmax table), rwr
   analysis/   # sensor table, scripted sensor / datalink / missile / defense replays,
               # missile sweep, defense stats, Blue test reaction
-  tactics/    # genome + interpreter, maneuvers (primitives), red_defense (state machine)
-  ga/         # elitist GA
+  tactics/    # genome + interpreter, maneuvers (primitives), red_defense (state machine),
+              # preplanned (spec 4 presentation Red controller + maneuver kinds)
+  ga/         # elitist GA (scenario YAML or spec 4 presentations)
   acmi/       # ACMI 2.2 exporter
-  scenarios/  # YAML/JSON loader
+  scenarios/  # YAML/JSON loader, presentation sampler + presentation_menus.yaml
+  presentation_runner.py  # run / export one presentation
 scenarios/    # default_4v3.yaml, cap_4v2.yaml
 docs/design.md, docs/specs/01-sensors.md, docs/specs/02-track-sharing.md,
 docs/specs/02b-coast-and-lock.md, docs/specs/03a-missile-kinematics.md,
-docs/specs/03-missile-defense.md
+docs/specs/03-missile-defense.md, docs/specs/04-red-presentations.md
 tests/
 ```
 

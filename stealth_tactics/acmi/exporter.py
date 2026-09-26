@@ -45,13 +45,17 @@ LINK_WEAPON_TYPES = {"link_track", "launch", "launch_remote", "support_handoff",
                      "miss_overshoot",
                      # Spec 3 missile defense
                      "ground", "rwr_mode", "defend", "threat_cleared", "recommit",
-                     "press", "depart", "blue_defend", "blue_recommit"}
+                     "press", "depart", "blue_defend", "blue_recommit",
+                     # Spec 4 presentations
+                     "preplanned_start", "preplanned_skip", "preplanned_abort",
+                     "preplanned_end", "breakup", "winchester"}
 ALWAYS_BOOKMARK = {"launch", "launch_remote", "support_handoff", "autonomous",
                    "support_lost", "hit", "miss", "timeout", "support_regained",
                    "lost_coast_timeout", "lost_basket", "support_dropped",
                    "defeat_speed", "defeat_opening", "miss_overshoot",
                    "ground", "defend", "recommit", "press", "depart",
-                   "blue_defend", "blue_recommit"}
+                   "blue_defend", "blue_recommit",
+                   "preplanned_start", "preplanned_abort", "winchester"}
 NM_M = 1852.0
 
 
@@ -81,12 +85,15 @@ class ACMIExporter:
         reference_time: Optional[datetime] = None,
         title: str = "ML Stealth Tactics Engagement",
         sensor_events: bool = True,
+        comments: Optional[str] = None,
     ) -> None:
         self.reference_time = reference_time or datetime(
             2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc
         )
         self.title = title
         self.sensor_events = sensor_events
+        # Spec 4: optional global Comments= (e.g. the presentation summary)
+        self.comments = comments
         self._id_map: Dict[str, str] = {}
 
     def object_id(self, uid: str, kind: str = "ac") -> str:
@@ -107,6 +114,8 @@ class ACMIExporter:
             "0,DataSource=ML-Stealth-Tactics",
             "0,Author=stealth_tactics",
         ]
+        if self.comments:
+            lines.append(f"0,Comments={_escape(self.comments)}")
 
         introduced: set = set()
         last_alive: Dict[str, bool] = {}

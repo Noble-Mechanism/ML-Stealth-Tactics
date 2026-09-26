@@ -1,0 +1,143 @@
+# Spec 4 presentation menus (docs/specs/04-red-presentations.md, decisions C and H).
+#
+# DATA ONLY: new formations and new maneuvers built from an existing maneuver
+# kind need no code changes. Add an entry and it joins the sampler (formations
+# are eligible when their slot count equals PresentationConfig.n_red).
+#
+# Formations
+# ----------
+# Offsets are in the Red flight frame, lead jet (slot 1) at the origin, nose
+# pointed at Blue: `right` NM (+ = right of the nose), `back` NM (+ = behind the
+# lead; nobody is ahead of the lead), optional `up` m. Values are numbers or
+# expressions over the formation's `params` (+ - * /, sind(), cosd()).
+#   params:  name: [lo, hi]            uniform draw
+#            name: {choice: [a, b]}    uniform choice
+#   mirror:  true -> right offsets flipped with probability 1/2
+#   groups:  ordered; slot numbers follow group order. `at` = group anchor
+#            [right, back(, up)]; `slots` = offsets inside the group (same form)
+#            or a shape name: single | pair (pair = [[0,0],[elem,0]], needs
+#            param `elem`, which keeps a group within ~3 NM).
+#   halves:  two lists of group names or "Group.k" slot refs (1-based); used by
+#            maneuvers with divide: halves. After mirroring, the half with the
+#            smaller mean `right` turns left in a split.
+# Every formation must fit a 25 x 25 NM box for every drawn spacing (tested at
+# all parameter corners).
+formations:
+  # ---------------------------------------------------------------- 6 ships
+  wall:
+    description: three 2-ship groups line abreast
+    params: {lat: [4, 8], elem: [1, 2.5]}
+    groups:
+      - {name: A, at: [0, 0], slots: pair}
+      - {name: B, at: ["-lat", 0], slots: pair}
+      - {name: C, at: ["lat", 0], slots: pair}
+    halves: [[B, A.1], [A.2, C]]
+  box:
+    description: two 2-ship groups abreast in front, two singles in trail
+    params: {lat: [5, 10], trail: [5, 10], elem: [1, 2.5]}
+    mirror: true
+    groups:
+      - {name: FL, at: [0, 0], slots: pair}
+      - {name: FR, at: ["lat", 0], slots: pair}
+      - {name: TL, at: [0, "trail"], slots: single}
+      - {name: TR, at: ["lat", "trail"], slots: single}
+    halves: [[FL, TL], [FR, TR]]
+  ladder:
+    description: three 2-ship groups in trail, stepped in altitude
+    params: {trail: [4, 8], elem: [1, 2.5], step: [500, 1000], alt_sign: {choice: [-1, 1]}}
+    groups:
+      - {name: A, at: [0, 0, 0], slots: pair}
+      - {name: B, at: [0, "trail", "alt_sign*step"], slots: pair}
+      - {name: C, at: [0, "2*trail", "2*alt_sign*step"], slots: pair}
+    halves: [[A, B.1], [B.2, C]]
+  echelon:
+    description: three 2-ship groups in echelon
+    params: {gap: [3, 6], ang: [30, 60], elem: [1, 2.5]}
+    mirror: true
+    groups:
+      - {name: A, at: [0, 0], slots: pair}
+      - {name: B, at: ["gap*sind(ang)", "gap*cosd(ang)"], slots: pair}
+      - {name: C, at: ["2*gap*sind(ang)", "2*gap*cosd(ang)"], slots: pair}
+    halves: [[A, B.1], [B.2, C]]
+  vic:
+    description: lead group forward, two groups back left and right (arrowhead)
+    params: {lat: [4, 8], back: [3, 8], elem: [1, 2.5]}
+    groups:
+      - {name: A, at: [0, 0], slots: pair}
+      - {name: B, at: ["-lat", "back"], slots: pair}
+      - {name: C, at: ["lat", "back"], slots: pair}
+    halves: [[B, A.1], [A.2, C]]
+  champagne:
+    description: two groups abreast in front, one group trailing in the middle
+    params: {lat: [5, 10], back: [4, 9], elem: [1, 2.5]}
+    mirror: true
+    groups:
+      - {name: A, at: [0, 0], slots: pair}
+      - {name: B, at: ["lat", 0], slots: pair}
+      - {name: C, at: ["lat/2", "back"], slots: pair}
+    halves: [[A, C.1], [C.2, B]]
+  # ---------------------------------------------------------------- 8 ships
+  # (not drawn at the default n_red = 6; set n_red = 8 to use them)
+  wall_8:
+    description: four 2-ship groups line abreast
+    params: {lat: [3, 6], elem: [1, 2.5]}
+    groups:
+      - {name: A, at: [0, 0], slots: pair}
+      - {name: B, at: ["lat", 0], slots: pair}
+      - {name: C, at: ["2*lat", 0], slots: pair}
+      - {name: D, at: ["3*lat", 0], slots: pair}
+    halves: [[A, B], [C, D]]
+  box_8:
+    description: two 2-ship groups abreast, two 2-ship groups in trail
+    params: {lat: [5, 10], trail: [5, 10], elem: [1, 2.5]}
+    mirror: true
+    groups:
+      - {name: FL, at: [0, 0], slots: pair}
+      - {name: FR, at: ["lat", 0], slots: pair}
+      - {name: TL, at: [0, "trail"], slots: pair}
+      - {name: TR, at: ["lat", "trail"], slots: pair}
+    halves: [[FL, TL], [FR, TR]]
+  ladder_8:
+    description: four 2-ship groups in trail, stepped in altitude
+    params: {trail: [3, 6], elem: [1, 2.5], step: [400, 800], alt_sign: {choice: [-1, 1]}}
+    groups:
+      - {name: A, at: [0, 0, 0], slots: pair}
+      - {name: B, at: [0, "trail", "alt_sign*step"], slots: pair}
+      - {name: C, at: [0, "2*trail", "2*alt_sign*step"], slots: pair}
+      - {name: D, at: [0, "3*trail", "3*alt_sign*step"], slots: pair}
+    halves: [[A, B], [C, D]]
+
+# Pre-planned maneuvers (exactly one per presentation, decisions H, I, J)
+# ------------------------------------------------------------------------
+#   kind:       behaviour registered in tactics/preplanned.py
+#               (turn_out | cold | altitude); a new kind = one decorated function
+#   divide:     all | halves (formation `halves`)
+#   trigger_nm: range-trigger window (true range, any live Red to any live Blue),
+#               capped at start range - trigger_margin_nm
+#   weight:     relative draw weight (default 1)
+#   params:     same syntax as formation params
+maneuvers:
+  split:
+    description: halves turn out opposite ways (outward), angle off the bearing to the nearest Blue
+    kind: turn_out
+    divide: halves
+    trigger_nm: [35, 45]
+    params: {angle_deg: [30, 60], leg_s: [30, 60]}
+  pump:
+    description: whole flight turns cold at max speed holding altitude, then recommits
+    kind: cold
+    divide: all
+    trigger_nm: [30, 40]
+    params: {leg_s: [20, 40]}
+  low_high_split:
+    description: stays hot; one half descends to a low block, the other climbs
+    kind: altitude
+    divide: halves
+    trigger_nm: [32, 45]
+    params: {low_alt_m: [1000, 3000], high_delta_m: [1500, 3000], low_half: {choice: [0, 1]}}
+  altitude_change:
+    description: whole flight stays hot and moves to a low or high block
+    kind: altitude
+    divide: all
+    trigger_nm: [30, 40]
+    params: {direction: {choice: [low, high]}, low_alt_m: [1000, 3000], high_alt_m: [11500, 13500]}

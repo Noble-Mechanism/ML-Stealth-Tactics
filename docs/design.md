@@ -4,7 +4,7 @@
 
 A **fast**, seedable discrete-time air-combat testbed so a genetic algorithm can
 evolve **high-level fighter tactics** for a 4-ship of generic stealth aircraft
-(Blue) against a fixed Red presentation. Best engagements export to TacView
+(Blue) against randomized Red presentations (Spec 4) or a fixed scenario YAML. Best engagements export to TacView
 ACMI 2.2 for visual playback.
 
 ## Simulation model
@@ -155,6 +155,48 @@ sourced missile data.
 - Blue scripted test reaction (`analysis/blue_test_defense.py`) is for tests and
   replays only; the GA does not use it.
 
+## Red presentations (Spec 4 — see `docs/specs/04-red-presentations.md`)
+
+- **Presentation** (`scenarios/presentation.py`): one Red flight of `n_red` = 6
+  jets (Rusty; configurable, 8-ship formations already in the menu) relative to
+  the fixed Blue start of `default_4v3.yaml`: formation + spacings, range 40-60 NM,
+  azimuth ±40° off Blue's nose, Red pointed at Blue lead, base altitude
+  6-12 km (+ formation stack, ±150 m jitter, clipped 1-13.5 km), speed fixed
+  250 m/s; aggressiveness band (1/3 each) then uniform inside it; SAS/SSA 50/50;
+  exactly one pre-planned maneuver with its range trigger. Stores every drawn
+  value, the Blue block and the absolute Red start states (JSON round trip).
+- **Menus are data** (`scenarios/presentation_menus.yaml`): formations = ordered
+  groups (≤ ~3 NM each) with slot offsets as expressions over drawn params, plus
+  `halves` for maneuvers that divide the flight; 6-ship wall, box, ladder,
+  echelon, vic, champagne; 8-ship wall_8, box_8, ladder_8. Every formation fits
+  a 25 x 25 NM box at every parameter corner (tested). Maneuvers = YAML entries
+  over registered kinds (`tactics/preplanned.py`, `@register_kind`): split
+  (turn_out, halves), pump (cold, all), low_high_split (altitude, halves),
+  altitude_change (altitude, all).
+- **Red in presentation mode** (`PresentationRedController`): wingmen station-keep
+  on the flight leader and every jet flies its assigned altitude (not Blue's)
+  until break-up (maneuver start, defending, own FC track, Blue inside 20 NM),
+  then individual pure pursuit on true positions (perfect GCI; GCI quality is a
+  future knob). The maneuver fires once when the true range from any live Red to
+  any live Blue reaches the trigger. Defense always wins (skip if not HOT at the
+  trigger, abort for good if defending). Not a turn-away. A Red jet with no
+  missiles and none in flight departs (not a turn-away).
+- **Early end** (`SimConfig`, both flags off by default so YAML / regression
+  runs are unchanged; the presentation runner turns them on):
+  `early_end_winchester` (no jet on either side can shoot and nothing in the
+  air) and `finish_missiles_after_wipeout` (K2: after one side is wiped out,
+  missiles in the air still resolve, so trade kills count). The D9 all-Red-departed
+  end is unchanged. `SimResult.end_reason` ∈ blue_dead, red_dead,
+  both_winchester, red_departed, time_cap. A Blue-only Winchester fight goes on
+  (Red can chase; surviving to the cap = got away).
+- **Seeding:** named sub-streams per field group from the presentation seed;
+  `sim_seed` derived from the presentation seed (never from a genome's index).
+  `build_eval_set(master, gen, 24)` = one maneuver x band x doctrine crossing per
+  generation (resampled each generation); `build_benchmark_set(master, 64)`.
+- **Runner** (`presentation_runner.run_presentation`): 360 s cap, SAS Blue by
+  default; `export_presentation_acmi` writes the presentation summary into
+  `0,Comments=`.
+
 ## Tactics genome (high-level)
 
 Not stick-and-throttle traces. Genes encode:
@@ -222,6 +264,18 @@ Weights live on `GAConfig` (`stealth_tactics/ga/evolution.py`).
 - ENU → lon/lat via small-angle offset from a fixed reference (35°N, 115°W).
 
 ## GA champion capture
+
+**Spec 4 presentation mode** (`GAConfig.presentations_per_gen > 0`): every genome
+in a generation plays the same N presentations (fitness = mean per-fight fitness,
+a placeholder until spec 7), `workers` > 1 uses a process pool. The generation's
+best is scored on the fixed benchmark set; the champion is the best benchmark
+score. The champion keeps its stored presentation dicts; at the end the GA
+re-runs it on those stored presentations (and the benchmark) and raises if
+anything differs, then records its best fight for the ACMI. `champion.json` +
+`replay-champion` reproduce it from a fresh process. `GAConfig.sim_max_time_s`
+default is now 360 s (Rusty), also in YAML mode.
+
+**Scenario YAML mode:**
 
 Each evaluation uses `sim_seed = GAConfig.seed + 1000 + seed_offset`. Generation
 trials use `seed_offset = gen * 100 + i`. The champion stores that

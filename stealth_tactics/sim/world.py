@@ -39,6 +39,24 @@ class SimConfig:
     ssa_interval_s: float = 3.0
     # D9: end once every live Red jet has departed and no missile is in flight
     early_end_on_departure: bool = True
+    # Spec 4 K (off by default so YAML / legacy regression paths are unchanged;
+    # the presentation runner turns both on):
+    # (a) end when no jet on either side can still shoot (alive, not departed,
+    #     missiles left) and nothing is in the air;
+    early_end_winchester: bool = False
+    # K2: when one side is wiped out, keep flying until every missile in flight
+    # has resolved (trade kills count), then end. Also marks wipeouts ended_early.
+    finish_missiles_after_wipeout: bool = False
+
+
+# Spec 4 end reasons (SimResult.end_reason)
+END_BLUE_DEAD = "blue_dead"
+END_RED_DEAD = "red_dead"
+END_BOTH_WINCHESTER = "both_winchester"
+END_RED_DEPARTED = "red_departed"
+END_TIME_CAP = "time_cap"
+END_REASONS = (END_BLUE_DEAD, END_RED_DEAD, END_BOTH_WINCHESTER, END_RED_DEPARTED,
+               END_TIME_CAP)
 
 
 @dataclass
@@ -62,6 +80,12 @@ class SimResult:
     shots: List[dict] = field(default_factory=list)
     red_shots: int = 0
     ended_early: bool = False
+    # Spec 4: why the fight ended (END_REASONS); presentation dict when the
+    # engagement came from a spec 4 presentation
+    end_reason: str = ""
+    presentation: Optional[dict] = None
+    # Spec 4: pre-planned maneuver report from the presentation Red controller
+    preplanned: Optional[dict] = None
 
 
 def _rng(a: Aircraft, b: Aircraft) -> float:
@@ -118,6 +142,7 @@ class World:
         self._salvo: Dict[str, tuple] = {}
         self._shot_info: Dict[str, dict] = {}
         self.ended_early = False
+        self.end_reason = END_TIME_CAP
 
     def get(self, uid: str) -> Optional[Aircraft]:
         return self._by_id.get(uid)
@@ -132,10 +157,21 @@ class World:
         self._record_frame()
         dt = self.config.dt
         while self.time_s < self.config.max_time_s:
-            if not self.alive(Coalition.BLUE) or not self.alive(Coalition.RED):
-                break
-            if self.config.early_end_on_departure and self._all_red_departed():
+            blue_up, red_up = self.alive(Coalition.BLUE), self.alive(Coalition.RED)
+            if not blue_up or not red_up:
+                in_air = any(m.alive for m in self.missiles)
+                if not (self.config.finish_missiles_after_wipeout and in_air):
+                    self.end_reason = END_BLUE_DEAD if not blue_up else END_RED_DEAD
+                    if self.config.finish_missiles_after_wipeout:
+                        self.ended_early = True
+                    break
+            elif self.config.early_end_on_departure and self._all_red_departed():
                 self.ended_early = True
+                self.end_reason = END_RED_DEPARTED
+                break
+            elif self.config.early_end_winchester and self._both_winchester():
+                self.ended_early = True
+                self.end_reason = END_BOTH_WINCHESTER
                 break
 
             self._update_sensors()
@@ -273,6 +309,15 @@ class World:
     def _all_red_departed(self) -> bool:
         reds = self.alive(Coalition.RED)
         return (bool(reds) and all(r.departed for r in reds)
+                and not any(m.alive for m in self.missiles))
+
+    @staticmethod
+    def can_still_shoot(ac: Aircraft) -> bool:
+        """Spec 4 K(a): alive, not departed, missiles left."""
+        return ac.state.alive and not ac.departed and ac.ammo > 0
+
+    def _both_winchester(self) -> bool:
+        return (not any(self.can_still_shoot(a) for a in self.aircraft)
                 and not any(m.alive for m in self.missiles))
 
     def log_event(self, ev: dict) -> None:
@@ -417,4 +462,5 @@ class World:
             shots=self._shots_table(),
             red_shots=self.red_shots,
             ended_early=self.ended_early,
+            end_reason=self.end_reason,
         )

@@ -25,6 +25,9 @@ stealth-tactics = "stealth_tactics.cli:main"
 where = ["."]
 include = ["stealth_tactics*"]
 
+[tool.setuptools.package-data]
+stealth_tactics = ["scenarios/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
