@@ -2,8 +2,9 @@
 
 Status: **implemented (2026-09-25).** Rusty approved D1–D10 exactly as recommended,
 plus changes **A–C** (F-35 RCS table, 100 m AGL floor with aggressiveness-based drag
-depth, per-jet firing doctrines). See "Implementation" at the end for deviations and
-results. All numbers are prototype placeholders. Spec 3a (missile
+depth, per-jet firing doctrines). **Changed 2026-09-26 (approved change D):**
+one defensive reaction per Red jet, then every jet presses; see "Approved change D".
+See "Implementation" at the end for deviations and results. All numbers are prototype placeholders. Spec 3a (missile
 kinematics) is unchanged. Whether a defense works is decided only by the fly-out
 model (energy bleed below Mach 1.2, or the missile no longer closing).
 
@@ -39,7 +40,9 @@ threatens Blue but flies into no-escape range.
 - **Turn-away limit** per Red jet (default 2, see D10). Once the limit is used, the
   jet either presses (aggressive) or leaves the fight for good (conservative). A
   departed jet is "out of the fight"; spec 7 decides how fitness scores that. The
-  hard sim time limit stays.
+  hard sim time limit stays. *Superseded 2026-09-26 by approved change D: limit 1,
+  then every jet presses; aggressiveness sets how early and how hard Red defends,
+  not whether it stays.*
 - **A-pole and f-pole** are recorded for every shot.
 - **Maneuver primitives** (crank, beam, drag, hot) go in their own module. Spec 4
   will reuse them for one pre-planned maneuver per Red presentation (split, pump,
@@ -105,7 +108,10 @@ datalink (spec 2). States:
 - **DEFENDING → COLD:** when the threat clears (D4). COLD keeps the reaction heading
   for `T_cold` (D4), then the jet goes HOT.
 - **Limit reached:** on the next trigger after the limit is used, the jet goes to
-  PRESSING (ignores cues, stays hot and shoots) or DEPARTED, depending on D1.
+  PRESSING (ignores cues, stays hot and shoots). Since change D (2026-09-26) this
+  holds for every `a`; before it, `a < 0.5` went to DEPARTED (D1/D10). The only
+  way into DEPARTED now is spec 4 rule L (out of missiles, none of its own in
+  flight).
 - **Shooting** follows D6.
 
 ### 4. Shot log
@@ -222,7 +228,7 @@ only for the test reaction here, and they are ready as spec 5 network inputs.
 *Why:* this stops Blue from chasing a runner until the time limit and keeps fights
 short.
 
-**D10 — Turn-away limit: default 2 (approved).**
+**D10 — Turn-away limit: default 2 (approved; superseded by change D, now 1).**
 - Each HOT → DEFENDING transition counts, crank included.
 - At a = 0 one cycle is about 60–90 s (drag, clear, 40 s cold). Two cycles plus a
   press or departure fits inside 240 s.
@@ -270,6 +276,46 @@ nothing at anyone until the pair resolved).
 - Replaces the old "ripple all 4 in 2 s" behaviour, which remains as `legacy`
   for regression tests only.
 
+## Approved change D — one reaction, then press (Rusty, 2026-09-26)
+
+**Change.**
+- Turn-away limit goes from 2 to **1**: each Red jet gets exactly **one**
+  defensive reaction (drag, beam or crank as its band dictates; cranks count).
+- After that one reaction, **every** Red jet presses on the next trigger,
+  regardless of aggressiveness (the `a < 0.5` depart branch is removed).
+  Aggressiveness now controls **how early and how hard** Red defends (trigger
+  level, reaction, drag depth, `T_cold`), not whether it stays.
+- The only reason a Red jet departs is being out of missiles with none of its
+  own in flight (spec 4 rule L). The D9 "every live Red departed" early end
+  stays in the code but can now only fire through those Winchester departures;
+  `end_reason = red_departed` keeps meaning "every live Red departed".
+- The 360 s cap (spec 4) is unchanged.
+
+**Rusty's reasoning.** Conservative Red was dragging twice and going home with
+no shots in about a third of presentations, producing no-kill fights. One
+reaction then press keeps fights meaningful, and teaches the network that the
+first shot makes a conservative flight turn and the follow-up kills.
+
+**As built.**
+- `DefenseConfig.turn_away_limit = 1` and a new `depart_after_limit = False`.
+  The old behaviour is kept, for reference only, as `DefenseConfig.spec3()`
+  (limit 2, `depart_after_limit=True`, press if `a >= press_threshold`). Spec 3
+  replays D1/D2 (`defense-replays`) are pinned to `DefenseConfig.spec3()` so they
+  still show the retired press/depart split; everything else (YAML scenarios
+  with defense on, GA, presentations) uses the new default.
+- **Legacy/regression mode is untouched.** The exact-match regression
+  (`test_regression_defense_off_legacy_old_rcs_matches_pre_spec3`) runs with
+  Red defense **off** and `legacy` doctrine, so the state machine never runs and
+  the fingerprint is unchanged; no extra gate was needed.
+- Tests: every band presses after one reaction; a conservative jet drags once,
+  then presses and never departs over 360 s while it has missiles; a second
+  threat (new emitter, missile active) after the one reaction does not start
+  another turn-away; a pressing jet out of missiles still departs
+  (`force_depart`); in presentations only Winchester departures occur. The
+  spec 3 press/depart test runs on `DefenseConfig.spec3()`.
+- Effect on the spec 4 stats (100 presentations, default Blue): see
+  `docs/specs/04-red-presentations.md`, "Approved change 2026-09-26".
+
 ## Deferred
 
 - Notching and chaff/countermeasures (sensor model has no Doppler or clutter;
@@ -280,6 +326,9 @@ nothing at anyone until the pair resolved).
   run to the cap. This is left for the network (specs 5/6) to solve (e.g. shoot
   on a remote/IRST track, delay the lock, pincer). Fallback if it cannot:
   increase the sim time cap.
+  *(2026-09-26: change D means conservative Red now drags once and then presses
+  back in, so these fights produce shots and kills; the network still gains by
+  making the first shot count.)*
 - Radar on/off control (spec 5).
 - Red missile launch warning.
 - Flight-level reactions (a wingman defending on a flightmate's cue).

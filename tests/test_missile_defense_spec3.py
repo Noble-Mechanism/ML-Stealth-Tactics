@@ -290,24 +290,96 @@ def test_clear_waits_for_tof_after_support_cue():
     assert states[14.5] == DEFENDING and states[17.0] == COLD
 
 
-@pytest.mark.parametrize("a,final", [(0.8, PRESSING), (0.2, DEPARTED)])
-def test_turn_away_limit_press_or_depart(a, final):
+def _periodic(mode, period=100.0, on_s=5.0, eid=None):
+    """5 s of cue every ``period`` s: defend, clear, cold (<= 40 s), hot again."""
+    eid = eid or ("M1" if mode == MISSILE_ACTIVE else "B1")
+    return lambda t: [_cue(mode, eid=eid, src="B1")] if (t % period) < on_s else []
+
+
+@pytest.mark.parametrize("a", [0.0, 0.2, 0.5, 0.8, 1.0])
+def test_turn_away_limit_one_then_every_band_presses(a):
+    """Approved change 2026-09-26: exactly one reaction, then PRESSING for all a."""
     ac, b = red(), blue(0.0, -40_000.0)
     w = FakeWorld([ac, b])
     d = RedDefense(a)
-    mode = MISSILE_ACTIVE if a >= 2 / 3 else LOCK
-    period = 100.0     # 5 s of cue every 100 s: defend, clear, cold (<= 40 s), hot
+    assert d.cfg.turn_away_limit == 1 and not d.cfg.depart_after_limit
+    mode = MISSILE_ACTIVE if a >= 2 / 3 else (SUPPORT if a >= 1 / 3 else LOCK)
+    hist = _run(d, w, ac, _periodic(mode, period=200.0), 405.0)
+    jd = d.jet(ac)
+    assert jd.turn_aways == 1 and jd.state == PRESSING and not ac.departed
+    assert all(s for t, st, s in hist if t >= 200.0)
+    types = [e["type"] for e in w.events]
+    assert types.count("defend") == 1 and types.count("press") == 1
+    assert "depart" not in types
+
+
+def test_conservative_drags_once_then_presses_never_departs_with_missiles():
+    """(a) a = 0 drags on the first lock, then presses for the rest of a 360 s
+    fight under repeated locks; never departs while it has missiles."""
+    ac, b = red(), blue(0.0, -40_000.0)
+    assert ac.ammo > 0
+    w = FakeWorld([ac, b])
+    d = RedDefense(0.0)
+    hist = _run(d, w, ac, _periodic(LOCK, period=60.0), 360.0)
+    jd = d.jet(ac)
+    defends = [e for e in w.events if e["type"] == "defend"]
+    assert len(defends) == 1 and defends[0]["reaction"] == "drag"
+    assert jd.turn_aways == 1 and jd.state == PRESSING
+    assert not ac.departed and all(st != DEPARTED for _, st, _ in hist)
+    assert all(s for t, st, s in hist if t >= 60.0)      # pressing: may shoot
+
+
+def test_second_threat_after_one_reaction_no_second_turn_away():
+    """(b) after the one reaction (beam vs B1's support), a new, stronger threat
+    from another emitter (B2 missile active) does not start another turn-away."""
+    ac, b1, b2 = red(), blue(0.0, -40_000.0), blue(10_000.0, -40_000.0, uid="B2")
+    w = FakeWorld([ac, b1, b2])
+    d = RedDefense(0.5)
 
     def cues(t):
-        return [_cue(mode, eid="M1" if mode == MISSILE_ACTIVE else "B1", src="B1")] \
-            if (t % period) < 5.0 else []
-    hist = _run(d, w, ac, cues, 205.0)
+        if t < 5.0:
+            return [_cue(SUPPORT, eid="B1", src="B1")]
+        if 200.0 <= t < 220.0:
+            return [_cue(SUPPORT, 200.0, eid="B2", brg=0.3, src="B2"),
+                    _cue(MISSILE_ACTIVE, 205.0, eid="M9", brg=0.3, src="B2")]
+        return []
+    hist = _run(d, w, ac, cues, 240.0)
+    jd = d.jet(ac)
+    states = dict((round(t, 1), st) for t, st, _ in hist)
+    assert states[1.0] == DEFENDING and states[199.5] == HOT
+    assert all(st == PRESSING for t, st, _ in hist if t >= 200.0)
+    assert jd.turn_aways == 1
+    assert [e["type"] for e in w.events].count("defend") == 1
+    assert all(s for t, st, s in hist if t >= 200.0)
+
+
+@pytest.mark.parametrize("a,final", [(0.8, PRESSING), (0.2, DEPARTED)])
+def test_spec3_turn_away_limit_press_or_depart_legacy_config(a, final):
+    """Retired spec 3 behaviour, kept behind DefenseConfig.spec3()."""
+    ac, b = red(), blue(0.0, -40_000.0)
+    w = FakeWorld([ac, b])
+    d = RedDefense(a, DefenseConfig.spec3())
+    mode = MISSILE_ACTIVE if a >= 2 / 3 else LOCK
+    hist = _run(d, w, ac, _periodic(mode), 205.0)
     jd = d.jet(ac)
     assert jd.turn_aways == 2 and jd.state == final
     assert ac.departed == (final == DEPARTED)
     shoot_after = [s for t, st, s in hist if t >= 200.0]
     assert all(shoot_after) if final == PRESSING else not any(shoot_after)
     assert [e["type"] for e in w.events].count("defend") == 2
+
+
+def test_force_depart_after_press_out_of_missiles():
+    """(c, unit) rule L still applies to a pressing jet: force_depart -> DEPARTED,
+    no shooting, flies away."""
+    ac, b = red(), blue(0.0, -40_000.0)
+    w = FakeWorld([ac, b])
+    d = RedDefense(0.0)
+    _run(d, w, ac, _periodic(LOCK, period=60.0), 70.0)
+    assert d.jet(ac).state == PRESSING
+    d.force_depart(w, ac, "Winchester: no missiles left")
+    cmd, shoot = d.step(w, ac)
+    assert d.jet(ac).state == DEPARTED and ac.departed and shoot is False and cmd is not None
 
 
 def test_crank_may_shoot_beam_drag_may_not():

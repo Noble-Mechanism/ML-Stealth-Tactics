@@ -108,7 +108,7 @@ def format_stats(runs: List[dict], title: str) -> str:
     nf = sum(1 for r in runs if not r["fired"])
     L += ["",
           "End reasons: Bdead = blue_dead (every Blue dead), Rdead = red_dead, "
-          "Wch = both_winchester, Rdep = red_departed (every live Red departed), "
+          "Wch = both_winchester, Rdep = red_departed (every live Red departed; since 2026-09-26 only Winchester departures), "
           "cap = time_cap (360 s). B losses = Red kills.",
           "End reason counts: " + ", ".join(
               f"{k} {sum(1 for r in runs if r['end_reason'] == k)}" for k in END_REASONS),

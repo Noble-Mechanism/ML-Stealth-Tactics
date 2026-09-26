@@ -9,6 +9,9 @@ away (Q4), and N re-costed by measurement. Everything else approved as
 recommended. Each change is recorded under its decision as **Rusty's decision**
 with his reasoning. See "Implementation" at the end for results, judgment calls
 and outputs. All numbers are prototype placeholders, like specs 1–3a.
+**Approved change 2026-09-26:** one Red defensive reaction, then every Red jet
+presses; only Winchester Red depart. See "Approved change 2026-09-26" at the end
+(the "Implementation (2026-09-25)" numbers are from before it).
 
 ## What it does
 
@@ -43,13 +46,15 @@ per-fight fitness until spec 7 replaces it.
 - Aggressiveness `a ∈ [0, 1]` **per Red flight**; 3 bands (spec 3 D1); drag
   depth `depth(a) = (1 − a)(alt − 100 m) + a × 1,000 m` (spec 3 change B);
   `T_cold = 5 + 35(1 − a)` s (D4); turn-away limit 2, then press if `a ≥ 0.5`
-  else depart (D1/D10). Spec 4 only **draws** `a`.
+  else depart (D1/D10). Spec 4 only **draws** `a`. *(2026-09-26: now limit 1,
+  then every jet presses; see the approved change at the end.)*
 - Doctrines are per contact, SAS or SSA (spec 3 change C). Red currently
   defaults to SAS; spec 4 draws it per flight.
 - The defense state machine has priority over a pre-planned maneuver (spec 3,
   section 2: "spec 4 confirms"). Confirmed and detailed in **J**.
 - Fight ends once every live Red has departed and nothing is in the air
-  (spec 3 D9). Kept.
+  (spec 3 D9). Kept. *(Since 2026-09-26 only Winchester departures can
+  trigger it.)*
 - GA cap: **raised from 240 s to 360 s** (Rusty, Q1).
 - **Early-end rule (approved by Rusty in principle):** recorded as **K**.
 
@@ -259,7 +264,8 @@ a **future knob**.
 - **Recommendation: (2) with equal band weights (1/3 each), which is the same
   distribution as uniform, but the band is an explicit stratum** so the
   evaluation set gets every band equally (N). Drag depth, `T_cold` and
-  press/depart follow `a` exactly as in spec 3 (unchanged).
+  press/depart follow `a` exactly as in spec 3 (unchanged). *(2026-09-26: no
+  more press/depart split; every jet presses after its one reaction.)*
 - *Why:* band decides trigger and reaction, the biggest behavioural jump, so
   stratifying by band removes most of the set-to-set luck. Uniform inside the
   band keeps the continuous parts (drag depth, `T_cold`, press at 0.5)
@@ -382,6 +388,7 @@ The fight ends early **only** when:
   **Rusty (Q3):** approved: a Red jet with no missiles and none of its own in
   flight tries to leave (existing departure behaviour, not a turn-away). As
   built it applies in presentation mode; YAML Red is unchanged.
+  *Since 2026-09-26 this is the only reason a Red jet departs.*
 
 **M (approved) — Seeding and reproducibility.**
 - **Recommendation:**
@@ -564,7 +571,7 @@ The fight ends early **only** when:
 - **Replays** are natural sampler draws found by seed search (not stratum
   overrides). Replay D requires a real climb (high block ≥ 2,500 m above the base).
 
-### Stats (`/workspace/spec4_outputs/presentation_stats.txt`)
+### Stats (before the 2026-09-26 change; now `presentation_stats_before_one_reaction.txt`)
 
 100 random presentations (6 Red), default genome, 360 s cap, spec 4 early end.
 B losses = Red kills. End reasons: Bdead = every Blue dead, Rdead = every Red
@@ -653,3 +660,86 @@ ACMI files byte for byte (also a unit test).
 `champion.json` in a fresh process (`replay-champion`): mean fitness
 190.15972222222226 identical, recorded fight (presentation 23, 441.67, 5 kills,
 2 losses, `red_departed` at 237 s) identical, ACMI re-export byte-identical.
+
+## Approved change 2026-09-26 — one Red reaction, then press (Rusty)
+
+**Change** (also recorded in spec 3 as approved change D):
+- Red turn-away limit goes from 2 to **1**: each Red jet gets exactly one
+  defensive reaction (drag, beam or crank per its band; cranks count).
+- After it, **every** Red jet presses back in regardless of aggressiveness (the
+  `a < 0.5` depart branch is removed). Aggressiveness now controls how early and
+  how hard Red defends, not whether it stays.
+- The only reason a Red jet departs is L (out of missiles, none of its own in
+  flight). The "every live Red departed" early end is kept but can now only
+  trigger through Winchester departures; `end_reason = red_departed` still
+  means exactly that.
+- The 360 s cap stays.
+
+**Rusty's reasoning:** conservative Red was dragging twice and going home with
+no shots in about a third of presentations, producing no-kill fights. One
+reaction then press keeps fights meaningful, and teaches the network that the
+first shot makes a conservative flight turn and the follow-up kills.
+
+**As built.** `DefenseConfig(turn_away_limit=1, depart_after_limit=False)` is
+the new default; the retired behaviour is `DefenseConfig.spec3()` (reference
+only; spec 3 replays D1/D2 are pinned to it). Legacy/regression mode: the
+exact-match regression runs with Red defense off and `legacy` doctrine, so it
+is unaffected and needed no gate; it still passes unchanged.
+
+### Stats before → after (same 100 seeds, default Blue; `before_after_one_reaction.txt`)
+
+No-kill = neither side killed anything. R 0 shots = Red never fired.
+
+| group | n | B shots | B hit | R shots | R hit | B kills | B losses | dur med s | % cap | no-kill | end reasons before → after |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| all | 100 | 10.5 → 13.7 | 16 → 20 % | 9.3 → 15.2 | 23 → 22 % | 1.66 → 2.76 | 2.11 → 3.37 | 295 → 282 | 29 → 25 % | 33 → 0 | Bdead 31 Rdead 1 Wch 6 Rdep 33 cap 29 → Bdead 58 Rdead 4 Wch 7 Rdep 6 cap 25 |
+| conservative | 33 | 2.8 → 12.8 | 0 → 26 % | 0.0 → 15.5 | – → 22 % | 0.00 → 3.30 | 0.00 → 3.42 | 296 → 296 | 6 → 21 % | 33 → 0 | Rdep 31 cap 2 → Bdead 19 Rdead 3 Rdep 4 cap 7 |
+| middle | 36 | 14.1 → 13.8 | 10 → 11 % | 12.1 → 14.2 | 26 → 25 % | 1.44 → 1.47 | 3.17 → 3.53 | 321 → 278 | 44 → 19 % | 0 → 0 | Bdead 17 Wch 2 Rdep 1 cap 16 → Bdead 25 Wch 3 Rdep 1 cap 7 |
+| aggressive | 31 | 14.5 → 14.5 | 25 → 25 % | 16.0 → 16.0 | 20 → 20 % | 3.68 → 3.68 | 3.13 → 3.13 | 258 → 258 | 35 → 35 % | 0 → 0 | unchanged: Bdead 14 Rdead 1 Wch 4 Rdep 1 cap 11 |
+| altitude_change | 20 | 10.1 → 13.6 | 14 → 20 % | 6.8 → 13.3 | 26 → 23 % | 1.40 → 2.70 | 1.80 → 3.10 | 284 → 268 | 20 → 30 % | 9 → 0 | Bdead 6 Wch 1 Rdep 9 cap 4 → Bdead 9 Rdead 2 Wch 1 Rdep 2 cap 6 |
+| low_high_split | 28 | 10.0 → 13.3 | 12 → 16 % | 10.3 → 15.2 | 22 → 22 % | 1.21 → 2.18 | 2.21 → 3.32 | 296 → 294 | 32 → 39 % | 9 → 0 | Bdead 9 Wch 1 Rdep 9 cap 9 → Bdead 14 Rdead 1 Wch 1 Rdep 1 cap 11 |
+| pump | 20 | 13.2 → 14.7 | 16 → 18 % | 12.0 → 16.0 | 20 → 20 % | 2.10 → 2.65 | 2.40 → 3.25 | 309 → 290 | 45 → 20 % | 3 → 0 | Bdead 5 Wch 2 Rdep 4 cap 9 → Bdead 10 Wch 3 Rdep 3 cap 4 |
+| split | 32 | 9.5 → 13.5 | 20 → 25 % | 8.3 → 15.8 | 24 → 23 % | 1.94 → 3.38 | 2.03 → 3.66 | 300 → 268 | 22 → 12 % | 12 → 0 | Bdead 11 Rdead 1 Wch 2 Rdep 11 cap 7 → Bdead 25 Rdead 1 Wch 2 cap 4 |
+| SAS | 46 | 10.6 → 13.4 | 16 → 19 % | 7.9 → 12.3 | 28 → 28 % | 1.65 → 2.54 | 2.24 → 3.46 | 294 → 268 | 22 → 24 % | 16 → 0 | Bdead 19 Wch 2 Rdep 15 cap 10 → Bdead 30 Rdead 2 Wch 2 Rdep 1 cap 11 |
+| SSA | 54 | 10.4 → 13.9 | 16 → 21 % | 10.5 → 17.6 | 19 → 19 % | 1.67 → 2.94 | 2.00 → 3.30 | 302 → 287 | 35 → 26 % | 17 → 0 | Bdead 12 Rdead 1 Wch 4 Rdep 18 cap 19 → Bdead 28 Rdead 2 Wch 5 Rdep 5 cap 14 |
+
+Red departures 278 (84 Winchester) → 108 (all Winchester); presses 0 → 238.
+
+**Blue test reaction variant, before → after:** B shots 9.9 → 11.9, hit 16 →
+21 %; R shots 9.1 → 14.1, hit 3 → 4 %; B kills 1.61 → 2.54; B losses 0.30 →
+0.56; median 360 → 360 s; at the cap 59 → 86 %; no-kill fights 41 → 14; end
+reasons Wch 4 Rdep 37 cap 59 → Bdead 2 Rdead 3 Wch 4 Rdep 5 cap 86.
+
+**Surprises / notes.**
+- Aggressive band is bit-identical before and after: no aggressive jet ever got
+  a second trigger after recommitting in these 100 fights (and `a ≥ 0.5`
+  pressed anyway under the old rule), so only conservative and middle changed.
+- The change fixes the no-kill problem completely (33 → 0 no-kill fights), but
+  mostly **against Blue**: the scripted Blue now loses 3.37 jets per fight
+  (wiped out in 58 %, was 31 %) for 2.76 kills. Conservative Red that presses
+  after one drag kills 3.42 Blue per fight. The missile-economy/egress gap noted
+  above is now the dominant failure of the default genome.
+- `red_departed` now only happens when every live Red is Winchester (6 fights),
+  so it is effectively "Red shot everything and went home".
+- Middle band fights are shorter (median 321 → 278 s, cap 44 → 19 %) because
+  `a < 0.5` middle jets now press instead of cycling a second beam.
+
+**Replay C re-exported** (`replayC_low_high_split_box.*`, seed 51, 40.3 NM,
+a = 0.01 conservative, SAS): low-high split at 34.2 NM; every Red drags once on
+Blue's lock (38.5–68 s, turn-away 1/1), recommits at 112–146 s and presses on the
+next lock (129.5–164.5 s); both sides shoot from 198 s; 3 Red and 3 Blue killed;
+`time_cap` at 360 s (Blue shots 11, Red shots 12). The old version is kept as
+`replayC_..._before_one_reaction.*`. Replays A, B and D were regenerated too;
+they are identical apart from the "turn-away 1/1" text (they never used a
+second turn-away).
+
+**Timing and cost (`timing.txt`):** 0.99 s per engagement serial (mean
+simulated 288 s), 0.131 s wall on 8 workers; ~166 s per generation (50 × 24 +
+64), ~217 generations per 10 h night. Essentially unchanged.
+
+**Smoke evolve** (`-p 12 -g 3 --seed 42 --presentations 24 --benchmark 64
+--workers 8`, 142 s wall): gen best / benchmark 280.96 / 244.72, 291.19 /
+252.69, 286.48 / 252.69. Champion (gen 1) re-run from `champion.json` in a fresh
+process: mean fitness 291.1921296296296 identical, recorded fight (presentation
+2, 657.17, 6 kills, 1 loss, `red_dead` at 187.5 s) identical, ACMI
+byte-identical.

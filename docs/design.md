@@ -140,8 +140,11 @@ sourced missile data.
   a < 1/3 lock → drag; 1/3–2/3 support → beam; ≥ 2/3 missile active → crank
   (keeps firing and supporting). Threat cleared after 2 s without a qualifying cue
   and the TOF estimate (range / 700 m/s) run out; cold `5 + 35(1−a)` s; turn-away
-  limit 2 (cranks count), then press (a ≥ 0.5) or depart. The fight ends early
-  when all live Red have departed and nothing is in flight.
+  limit 1 (cranks count), then every jet presses regardless of `a` (approved
+  change 2026-09-26; the spec 3 rule "limit 2, then press if a ≥ 0.5 else depart"
+  is kept only as `DefenseConfig.spec3()`). The only Red departure is Winchester
+  (spec 4 L). The fight ends early when all live Red have departed and nothing
+  is in flight.
 - **Firing doctrine** per jet (`SimConfig.blue_doctrine` / `red_doctrine`,
   `Aircraft.firing_doctrine` override), both **per contact**:
   `shoot_assess_shoot` (default; max 1 own missile in flight per target, several

@@ -17,9 +17,15 @@ Per jet (RWR is not shared over the datalink). States:
   support cue; R_est = own fused range to that emitter, else the RWR intercept
   range) has run out or a missile-active cue seen during this defense has ended.
 - COLD keeps the reaction heading for T_cold = 5 s + 35 s x (1 - a), then HOT.
-- Turn-away limit (default 2): the next trigger after the limit is used ->
-  PRESSING (a >= 0.5: ignores cues, stays hot and shoots) or DEPARTED (turns
-  away from the Blue centroid of its fused picture at max speed, never fires).
+- Turn-away limit (default 1, approved change 2026-09-26): each jet gets exactly
+  ONE defensive reaction (drag / beam / crank per band; cranks count). The next
+  trigger after the limit is used -> PRESSING (ignores cues, stays hot and
+  shoots) for EVERY jet regardless of ``a``; aggressiveness controls how early
+  and how hard Red defends, not whether it stays. The only departure left is
+  spec 4 rule L (out of missiles, none of its own in flight; ``force_depart``).
+- Spec 3 behaviour (limit 2, then PRESSING if a >= 0.5 else DEPARTED = turn away
+  from the Blue centroid at max speed, never fires) is kept behind
+  ``DefenseConfig.spec3()`` (``depart_after_limit=True``) for reference only.
 - Drag descends to max(100 m AGL, alt - depth(a)); depth(0) = down to the floor,
   depth(1) = 1,000 m (approved change B; endpoints in DefenseConfig).
 """
@@ -46,16 +52,22 @@ REACTION = {CONSERVATIVE: "drag", MIDDLE: "beam", AGGRESSIVE: "crank"}
 @dataclass(frozen=True)
 class DefenseConfig:
     band_edges: tuple = (1.0 / 3.0, 2.0 / 3.0)       # D1
-    press_threshold: float = 0.5                      # D1: presses if a >= 0.5
+    press_threshold: float = 0.5                      # D1 (spec 3 only): presses if a >= 0.5
     crank_deg: float = 50.0                           # D2
     clear_hold_s: float = 2.0                         # D4
     t_cold_base_s: float = 5.0                        # D4: T_cold = base + span (1 - a)
     t_cold_span_s: float = 35.0
     tof_speed_mps: float = 700.0                      # D5
-    turn_away_limit: int = 2                          # D10
+    turn_away_limit: int = 1                          # D10 (2026-09-26: was 2)
+    depart_after_limit: bool = False                  # spec 3: a < press_threshold departs
     drag_depth_a0_m: Optional[float] = None           # B: None = down to the floor
     drag_depth_a1_m: float = 1000.0                   # B: 1,000 m descent at a = 1
     bearing_smoothing: float = 0.5                    # EMA weight on new RWR bearings
+
+    @classmethod
+    def spec3(cls, **kw) -> "DefenseConfig":
+        """Pre-2026-09-26 behaviour: two turn-aways, then press (a >= 0.5) or depart."""
+        return cls(turn_away_limit=2, depart_after_limit=True, **kw)
 
     def band(self, a: float) -> str:
         lo, hi = self.band_edges
@@ -231,7 +243,7 @@ class RedDefense:
             jd.last_trigger_t = t
             if jd.state == HOT:
                 if jd.turn_aways >= cfg.turn_away_limit:
-                    if jd.a >= cfg.press_threshold:
+                    if not cfg.depart_after_limit or jd.a >= cfg.press_threshold:
                         jd.state = PRESSING
                         self._log(world, ac, jd, "press",
                                   f"PRESS (turn-away limit {cfg.turn_away_limit} used, "

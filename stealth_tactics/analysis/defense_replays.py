@@ -10,6 +10,8 @@ B  aggressive Red (a = 1) fires, then cranks 50 deg on missile active while
    still supporting its own shot.
 C  middle Red (a = 0.5) beams on the support cue; its own missile coasts.
 D  turn-away limit: two cycles, then a = 0.8 presses (D1) and a = 0.2 departs (D2).
+   D1/D2 are pinned to DefenseConfig.spec3() (the retired spec 3 limit behaviour);
+   since the approved change of 2026-09-26 the default is one reaction, then press.
 E  Blue test reaction against a Red shot (crank while supporting, then drag).
 F  shoot-shoot-assess: two missiles at one target 3 s apart, then nothing at
    anyone until both are resolved.
@@ -31,15 +33,15 @@ from stealth_tactics.sim.weapons import OUTCOMES
 from stealth_tactics.sim.world import (SimConfig, World, SHOOT_ASSESS_SHOOT,
                                        SHOOT_SHOOT_ASSESS, LEGACY)
 from stealth_tactics.tactics.interpreter import RedCAPController
-from stealth_tactics.tactics.red_defense import RedDefense
+from stealth_tactics.tactics.red_defense import DefenseConfig, RedDefense
 from .blue_test_defense import BlueTestDefense  # noqa: F401  (re-export)
 
 KINDS = {
     "A": "conservative Red (a=0) drags on first lock, clears, cold 40 s, recommits",
     "B": "aggressive Red (a=1) fires, then cranks on missile active while supporting",
     "C": "middle Red (a=0.5) beams on the support cue; its own missile coasts",
-    "D1": "turn-away limit: two cycles, then a=0.8 presses",
-    "D2": "turn-away limit: two cycles, then a=0.2 departs",
+    "D1": "spec 3 turn-away limit (DefenseConfig.spec3): two cycles, then a=0.8 presses",
+    "D2": "spec 3 turn-away limit (DefenseConfig.spec3): two cycles, then a=0.2 departs",
     "E": "Blue scripted test reaction vs a Red shot (crank while supporting, then drag)",
     "F": "Blue shoot-shoot-assess (per contact): pair at R1, then a pair at R2 at once",
 }
@@ -160,11 +162,12 @@ def run_defense_replay(kind: str, seed: int = 1, record: bool = True,
         ctl = dict(fire="range", shot_frac=0.85)
     else:
         raise ValueError(kind)
+    dcfg = DefenseConfig.spec3() if kind in ("D1", "D2") else None
     b1, reds = _jets(blue_alt, red_alt, start_nm, n_red, red_ammo)
     blue = BlueShooter(["B1"], **ctl)
     blue_ctl = BlueTestDefense(blue) if wrap_test else blue
     red_ctl = RedCAPController([r.id for r in reds], mode="intercept",
-                               defense=RedDefense(a) if defense_on else None)
+                               defense=RedDefense(a, dcfg) if defense_on else None)
     cfg = SimConfig(dt=0.5, max_time_s=max_time_s or T, seed=seed, blue_doctrine=blue_doc)
     w = World([b1] + reds, cfg, blue_ctl, red_ctl, record=record)
     samples: List[dict] = []

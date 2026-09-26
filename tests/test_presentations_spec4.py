@@ -439,3 +439,47 @@ def test_jet_not_hot_at_trigger_skips():
     assert r.preplanned["jets"]["R2"]["status"] == "skipped"
     assert any(e["type"] == "preplanned_skip" and e["observer"] == "R2" for e in r.events)
     assert r.preplanned["status_counts"].get("skipped") == 1
+
+
+# ------------------------------------ approved change 2026-09-26 (one reaction) --
+def _conservative_seed():
+    s = 0
+    while sample_presentation(s).band != "conservative":
+        s += 1
+    return s
+
+
+def test_one_reaction_then_press_only_winchester_departs():
+    """(c, integration) with 1 missile per Red, every departure is a Winchester
+    departure of a jet with no missiles and none in flight; no jet takes more
+    than one counted turn-away."""
+    p = sample_presentation(_conservative_seed())
+    seen = {}
+
+    def prep(aircraft, defense):
+        for a in aircraft:
+            if a.coalition == Coalition.RED:
+                a.ammo = 1
+        seen["defense"] = defense
+        seen["reds"] = [a for a in aircraft if a.coalition == Coalition.RED]
+    r = run_presentation(p, prepare=prep)
+    deps = [e for e in r.events if e["type"] == "depart"]
+    assert all("Winchester" in e.get("reason", "") for e in deps)
+    for red_ac in seen["reds"]:
+        if red_ac.departed:
+            assert red_ac.ammo == 0
+    assert all(j.turn_aways <= 1 for j in seen["defense"].jets.values())
+    assert [e["type"] for e in r.events].count("winchester") == len(deps)
+
+
+@pytest.mark.parametrize("seed", [51, 3, 11])
+def test_presentations_no_threat_departures(seed):
+    """Default config: no Red leaves except via Winchester; <= 1 turn-away each."""
+    seen = {}
+    r = run_presentation(sample_presentation(seed),
+                         prepare=lambda ac, d: seen.__setitem__("d", d))
+    deps = [e for e in r.events if e["type"] == "depart"]
+    assert all("Winchester" in e.get("reason", "") for e in deps)
+    assert all(j.turn_aways <= 1 for j in seen["d"].jets.values())
+    if r.end_reason == END_RED_DEPARTED:
+        assert deps and len(deps) == [e["type"] for e in r.events].count("winchester")

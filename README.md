@@ -118,7 +118,7 @@ disable). Coast timeout 40 s, flight-time cap 180 s. See
 ## Missile defense tools (Spec 3)
 
 ```bash
-# TacView replays A-F (drag/recommit, crank, beam, turn-away limit press/depart,
+# TacView replays A-F (drag/recommit, crank, beam, spec 3 turn-away limit press/depart,
 # Blue test reaction, shoot-shoot-assess) + event logs with a-pole / f-pole
 python -m stealth_tactics defense-replays -o spec3_outputs
 # 100-seed stats: a in {0,.25,.5,.75,1} x Blue test reaction off/on x Blue doctrine
@@ -128,8 +128,10 @@ python -m stealth_tactics defense-stats --seeds 100 -o spec3_outputs
 Red jets hear Blue radar modes on an RWR (search / lock / support / missile
 active) and defend by aggressiveness band: conservative drags on a lock (dives
 toward the 100 m AGL floor), middle beams on support, aggressive cranks 50° on
-missile active and keeps shooting. After two turn-aways a jet presses (a ≥ 0.5)
-or leaves. Every jet fires shoot-assess-shoot (one missile in flight per contact) or
+missile active and keeps shooting. Each jet gets exactly one defensive
+reaction; after it every jet presses back in, whatever its aggressiveness
+(approved change 2026-09-26). A Red jet only leaves when it is out of missiles
+with none of its own in flight. Every jet fires shoot-assess-shoot (one missile in flight per contact) or
 shoot-shoot-assess (a pair per contact, 3 s apart), and can engage several
 contacts at once. See
 `docs/specs/03-missile-defense.md`.
