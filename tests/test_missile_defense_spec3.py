@@ -568,7 +568,10 @@ OLD_F35_TABLE = ((0.0, 0.05), (30.0, 0.10), (60.0, 0.45), (90.0, 0.90), (135.0, 
 # pre-spec-3 code (commit 4a5ebf0) byte for byte; re-baselined for Spec 8 (jet
 # energy model, soft speed floor, turn hysteresis, loft, 10 deg aspect bins):
 # the kinematics change every trajectory, so it is now a stability pin.
-PRE_SPEC3 = {0: "1892b7cbd55ba473", 1: "894b020fcfc9a5a3", 2: "8495e9d6202d6deb"}
+# Re-baselined again for Spec 8b (jet lift limit, transonic Cd0 rise, new
+# thrust lapse / ram gain): jet trajectories change; the missile is unchanged.
+# Spec 8 values were {0: 1892b7cbd55ba473, 1: 894b020fcfc9a5a3, 2: 8495e9d6202d6deb}.
+PRE_SPEC3 = {0: "6b4cb09c3f55ddbf", 1: "dd4c697b4e8f3036", 2: "757071008f10ec92"}
 
 
 def _fingerprint(seed):

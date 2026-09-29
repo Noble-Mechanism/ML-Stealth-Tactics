@@ -304,6 +304,11 @@ A/B overnight behaviour.
 
 ## Implementation notes (2026-09-28, finished 2026-09-29)
 
+> **Spec 8b (2026-09-29)** added a lift limit, a transonic Cd0 rise and new thrust
+> placeholders to the jet model. The jet numbers below (bleed gate at fixed n_max,
+> sustained turn) are the Spec 8 values. See `08b-jet-lift-drag.md` for the current
+> ones. The missile and loft numbers are unchanged.
+
 ### Numbers (verified 2026-09-29)
 
 - **A-d bleed gate** (`aircraft-sweep`, Blue placeholders unchanged, 40 kft,

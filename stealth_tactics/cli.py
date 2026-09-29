@@ -386,14 +386,15 @@ def cmd_missile_sweep(args: argparse.Namespace) -> int:
 
 def cmd_aircraft_sweep(args: argparse.Namespace) -> int:
     """Spec 8: jet energy bleed calibration (A-d gate)."""
-    from stealth_tactics.analysis.aircraft_sweep import bleed_run, format_bleed, gate_ok
+    from stealth_tactics.analysis.aircraft_sweep import (bleed_run, calibration_report,
+                                                          format_bleed, gate_ok)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     reps = []
-    lines = ["Spec 8 jet energy bleed calibration (A-d: Mach 0.9 -> ~0.7 in ~20 s "
-             "at 40 kft, 3-4 g).", ""]
-    for n in args.n_max:
+    lines = ["Spec 8/8b jet energy bleed calibration (A-d: Mach 0.9 -> ~0.7 in ~20 s "
+             "at 40 kft, lift-limited g).", ""]
+    for n in (args.n_max or [None]):
         rep = bleed_run(n_max=n, alt_ft=args.alt_ft, start_mach=args.mach, t_s=args.time)
         reps.append(rep)
         block = format_bleed(rep)
@@ -405,7 +406,10 @@ def cmd_aircraft_sweep(args: argparse.Namespace) -> int:
         print(f"  A-d gate: {'PASS' if ok else 'FAIL'}")
     nl = chr(10)
     (out_dir / "aircraft_bleed.txt").write_text(nl.join(lines) + nl, encoding="utf-8")
-    print(f"aircraft-sweep -> {out_dir / 'aircraft_bleed.txt'}")
+    perf = calibration_report()
+    (out_dir / "aircraft_performance.txt").write_text(perf, encoding="utf-8")
+    print(perf)
+    print(f"aircraft-sweep -> {out_dir / 'aircraft_bleed.txt'}, {out_dir / 'aircraft_performance.txt'}")
     return 0
 
 
@@ -679,9 +683,10 @@ def main(argv: list[str] | None = None) -> int:
     p_ms.set_defaults(func=cmd_missile_sweep)
 
     p_as = sub.add_parser("aircraft-sweep",
-                          help="Spec 8: jet energy bleed calibration (A-d gate)")
-    p_as.add_argument("--n-max", type=float, nargs="+", default=[3.0, 3.5, 4.0],
-                      help="load-factor caps to sweep (default 3 3.5 4)")
+                          help="Spec 8/8b: jet bleed gate + performance table")
+    p_as.add_argument("--n-max", type=float, nargs="+", default=None,
+                      help="structural load-factor caps to sweep (default: the type's "
+                           "own, lift-limited)")
     p_as.add_argument("--alt-ft", type=float, default=40000.0)
     p_as.add_argument("--mach", type=float, default=0.9)
     p_as.add_argument("--time", type=float, default=20.0)

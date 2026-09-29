@@ -18,6 +18,10 @@ ACMI 2.2 for visual playback.
   Soft speed floor: at `min_speed_mps` a jet can only pull the load factor its
   thrust sustains (no free max-g turning at the floor); turn-direction
   hysteresis near a 180° command.
+  Spec 8b: load factor is also lift-limited, min(n_max, q S CLmax / W), so a slow jet up
+  high must descend or unload; Cd0 has a transonic rise (x2.2 at M1.05) and thrust
+  lapses as sigma^1.2 with a ram gain, so a jet at 40 kft cannot accelerate level
+  through the hump but can hold M1.2 once supersonic (see `specs/08b-jet-lift-drag.md`).
 - **Ground (Spec 3):** flat ground at 0 m (`aircraft.GROUND_ALT_M`); hard
   **100 m AGL floor** for every aircraft (`ALT_FLOOR_AGL_M`, enforced in
   `integrate_aircraft`). A missile that reaches the ground ends with outcome `ground`.

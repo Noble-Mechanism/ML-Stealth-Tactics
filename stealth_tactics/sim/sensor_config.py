@@ -239,29 +239,63 @@ class MissileCoastConfig:
 # ------------------------------------------------ aircraft energy (Spec 8) ---
 @dataclass(frozen=True)
 class AircraftEnergyConfig:
-    """Spec 8 point-mass jet energy model. Unclassified placeholders, NOT real
-    F-35 / adversary performance. Separate Blue / Red sets (A-b); single n_max (A-c)."""
+    """Spec 8 / 8b point-mass jet energy model. Unclassified placeholders, NOT
+    real F-35 / adversary performance. Separate Blue / Red sets (A-b); single
+    n_max (A-c).
+
+    Spec 8b: available load factor = min(n_max, q S CLmax / W); Cd0 has a
+    transonic rise (``cd0_factor``); thrust = T_sl (rho/rho_sl)^thrust_density_exp
+    x (1 + thrust_ram_gain x max(0, M - thrust_ram_ref_mach)).
+    """
     mass_kg: float = 18000.0
     S_m2: float = 40.0
     Cd0: float = 0.025
     k_induced: float = 0.08
     n_max: float = 7.0
     T_sl_N: float = 110000.0
-    thrust_density_exp: float = 0.7
+    thrust_density_exp: float = 1.2
     max_mach: float = 1.2
     max_alt_m: float = 15000.0
     min_speed_mps: float = 90.0
+    # Spec 8b lift limit
+    CLmax: float = 1.3
+    # Spec 8b transonic drag rise: Cd0 x 1 up to cd0_rise_mach, rising
+    # (1 - (1 - x)^cd0_rise_exp) to cd0_peak_factor at cd0_peak_mach, then
+    # declining cd0_decline_per_mach (factor per Mach) to cd0_supersonic_floor.
+    cd0_rise_mach: float = 0.85
+    cd0_peak_mach: float = 1.05
+    cd0_peak_factor: float = 2.2
+    cd0_rise_exp: float = 2.0
+    cd0_decline_per_mach: float = 2.5
+    cd0_supersonic_floor: float = 1.5
+    # Spec 8b thrust vs Mach (ram recovery above the reference Mach)
+    thrust_ram_gain: float = 1.5
+    thrust_ram_ref_mach: float = 0.9
+
+    def cd0_factor(self, mach: float) -> float:
+        m0, mp = self.cd0_rise_mach, self.cd0_peak_mach
+        if mach <= m0:
+            return 1.0
+        if mach <= mp:
+            x = (mach - m0) / (mp - m0)
+            return 1.0 + (self.cd0_peak_factor - 1.0) * (1.0 - (1.0 - x) ** self.cd0_rise_exp)
+        return max(self.cd0_supersonic_floor,
+                   self.cd0_peak_factor - self.cd0_decline_per_mach * (mach - mp))
+
+    def thrust_n(self, rho: float, mach: float) -> float:
+        ram = 1.0 + self.thrust_ram_gain * max(0.0, mach - self.thrust_ram_ref_mach)
+        return self.T_sl_N * (rho / 1.225) ** self.thrust_density_exp * ram
 
 
 BLUE_ENERGY = AircraftEnergyConfig(
     mass_kg=18000.0, S_m2=40.0, Cd0=0.025, k_induced=0.08, n_max=7.0,
-    T_sl_N=110000.0, thrust_density_exp=0.7, max_mach=1.2, max_alt_m=15000.0,
-    min_speed_mps=90.0,
+    T_sl_N=146000.0, thrust_density_exp=1.2, max_mach=1.2, max_alt_m=15000.0,
+    min_speed_mps=90.0, CLmax=1.3,
 )
 RED_ENERGY = AircraftEnergyConfig(
     mass_kg=18000.0, S_m2=40.0, Cd0=0.028, k_induced=0.08, n_max=8.0,
-    T_sl_N=130000.0, thrust_density_exp=0.7, max_mach=1.4, max_alt_m=15000.0,
-    min_speed_mps=85.0,
+    T_sl_N=163000.0, thrust_density_exp=1.2, max_mach=1.4, max_alt_m=15000.0,
+    min_speed_mps=85.0, CLmax=1.4,
 )
 
 

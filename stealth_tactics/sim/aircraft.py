@@ -196,10 +196,12 @@ class Aircraft:
 
 
 def integrate_aircraft(ac: Aircraft, dt: float) -> None:
-    """Advance point-mass kinematics with the Spec 8 energy model.
+    """Advance point-mass kinematics with the Spec 8 / 8b energy model.
 
-    Commands stay heading / speed / altitude. Turn rate is n-limited, drag and
-    density thrust set along-track accel, and climb costs energy via sin(γ).
+    Commands stay heading / speed / altitude. Turn rate is limited by
+    min(n_max, q S CLmax / W), drag (transonic Cd0 rise + induced) and thrust
+    (density lapse, ram gain) set along-track accel, and climb costs energy via
+    sin(γ). A jet that cannot hold 1 g sinks.
     """
     if not ac.state.alive:
         return
@@ -222,28 +224,44 @@ def integrate_aircraft(ac: Aircraft, dt: float) -> None:
     # Flight-path angle from the climb/descent; clip so |sin γ| <= 1
     sin_g = float(np.clip(climb_rate / V, -0.95, 0.95))
 
-    # --- drag / thrust terms -------------------------------------------------
+    # --- drag / thrust terms (Spec 8b: transonic Cd0 rise, thrust vs Mach) ---
+    mach = V / a_sound
     q = 0.5 * rho * V * V
     qS = max(q * e.S_m2, 1e-6)
     W = e.mass_kg * G0
-    d0 = qS * e.Cd0
+    d0 = qS * e.Cd0 * e.cd0_factor(mach)
     kind = e.k_induced * W * W / qS          # induced drag per n^2
-    t_avail = e.T_sl_N * (rho / RHO_SL) ** e.thrust_density_exp
+    t_avail = e.thrust_n(rho, mach)
     # Implicit throttle: accelerate when cmd speed > current, else idle
     target_spd = float(np.clip(ac.cmd_speed_mps, e.min_speed_mps, max(v_ceil, e.min_speed_mps)))
     thrust = t_avail if target_spd > st.speed_mps + 0.5 else 0.0
 
-    # --- turn: commanded heading change → ω, capped by n_max ----------------
-    n_cap = max(e.n_max, 1.0 + 1e-9)
-    # Soft speed floor (A1.6): a jet may bleed down to min_speed_mps, but once
-    # there it can only pull the load factor its full thrust sustains (no
-    # free max-g turning at the floor). n is reduced so the step just reaches
-    # the floor; if even 1 g cannot be held the jet flies wings-level.
-    if dt > 0:
+    # --- available load factor: min(n_max, lift limit) (Spec 8b) -----------
+    n_lift = qS * e.CLmax / W
+    n_cap = min(max(e.n_max, 1.0 + 1e-9), n_lift)
+    max_sink = -min(0.95, max_climb / V)
+    if n_lift < 1.0:
+        # Cannot hold 1 g: wings level and sink (lift = W cos(gamma)), full
+        # thrust. The jet must descend to regain energy.
+        sin_g = min(sin_g, max(-math.sqrt(1.0 - n_lift * n_lift), max_sink))
+        climb_rate = sin_g * V
+        thrust = t_avail
+    elif dt > 0:
+        # Soft speed floor (Spec 8 A1.6): at min_speed_mps a jet can only pull
+        # the load factor its full thrust sustains. If even 1 g level cannot be
+        # held there, it unloads to 1 g and descends (glides) to hold the floor.
         need = (e.min_speed_mps - st.speed_mps) / dt + G0 * sin_g   # required (T-D)/m
         n2_floor = (t_avail - d0 - e.mass_kg * need) / max(kind, 1e-9)
         if n2_floor < n_cap * n_cap:
-            n_cap = float(np.sqrt(max(n2_floor, 1.0)))
+            if n2_floor >= 1.0:
+                n_cap = float(np.sqrt(n2_floor))
+            else:
+                n_cap = 1.0
+                sin_glide = ((t_avail - d0 - kind) / e.mass_kg
+                             - (e.min_speed_mps - st.speed_mps) / dt) / G0
+                sin_g = min(sin_g, max(sin_glide, max_sink))
+                climb_rate = sin_g * V
+                thrust = t_avail
     dh = _angle_diff(ac.cmd_heading_rad, st.heading_rad)
     # Turn-direction hysteresis: with the command within TURN_REVERSAL_BAND of
     # dead astern, keep turning the way the jet already is instead of letting a
@@ -259,9 +277,9 @@ def integrate_aircraft(ac: Aircraft, dt: float) -> None:
     ac.turn_dir = float(np.sign(omega)) if abs(omega_cmd) > omega_max else 0.0
     st.heading_rad = _wrap_pi(st.heading_rad + omega * dt)
     n_horiz = V * abs(omega) / G0
-    n = float(np.sqrt(1.0 + n_horiz * n_horiz))
+    n = float(np.sqrt(1.0 + n_horiz * n_horiz)) if n_lift >= 1.0 else n_lift
     if n > 1.0 + 1e-9 and n_cap < max(e.n_max, 1.0 + 1e-9):
-        thrust = t_avail                     # holding the floor in a turn: full thrust
+        thrust = t_avail                     # limited turn: full thrust
 
     # --- along-track accel ---------------------------------------------------
     drag = d0 + kind * n * n

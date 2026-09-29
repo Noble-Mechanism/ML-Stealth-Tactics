@@ -33,8 +33,9 @@ def cfg_kin(**kw):
 
 # --------------------------------------------------------------- A: energy ---
 def test_jet_bleed_gate_ad():
-    """A-d: 3–4 g turn at 40 kft from Mach 0.9 bleeds to ~Mach 0.7 within ~20 s."""
-    rep = bleed_run(n_max=3.5, alt_ft=40_000.0, start_mach=0.9, t_s=20.0)
+    """A-d: hard turn at 40 kft from Mach 0.9 bleeds to ~Mach 0.7 within ~20 s.
+    Spec 8b: the turn uses the lift-limited load factor (~3.1 g at the start)."""
+    rep = bleed_run(alt_ft=40_000.0, start_mach=0.9, t_s=20.0)
     assert gate_ok(rep), rep["final_mach"]
     assert 0.60 <= rep["final_mach"] <= 0.80
 
@@ -89,26 +90,34 @@ def _turn_degrees(alt_ft, t_s=30.0, dt=0.05, mach=0.9):
 
 def test_energy_turn_slower_at_high_alt_than_legacy_fixed_rate():
     """Spec 8 A2: a sustained turn at 40 kft is much slower than the legacy free
-    11 deg/s. Guards the soft speed floor: a jet that has bled to min_speed_mps
-    must not keep pulling n_max for free (which would turn at ~40 deg/s)."""
+    11 deg/s, and costs speed. Spec 8b: the lift limit (q S CLmax / W) now caps
+    g as the jet slows, so it settles near Mach 0.74 instead of bleeding to the
+    speed floor while pulling n_max."""
     deg, ac = _turn_degrees(40_000.0, t_s=30.0)
     legacy = F35_PARAMS.max_turn_rate_deg_s * 30.0
     assert deg < 0.6 * legacy, (deg, legacy)
     # and the jet has paid for it in speed
-    assert ac.state.speed_mps < 0.5 * 0.9 * 295.0
+    assert ac.state.speed_mps < 0.85 * 0.9 * 295.0
 
 
 def test_soft_speed_floor_limits_turn_rate():
-    """At the speed floor the achieved turn rate is bounded by sustainable n."""
+    """At the speed floor at 40 kft lift < weight (Spec 8b): the jet cannot turn
+    for free; it rolls wings level and sinks to regain energy."""
     from stealth_tactics.sim.aircraft import _angle_diff
-    deg_a, ac = _turn_degrees(40_000.0, t_s=15.0)
+    from stealth_tactics.sim.missile_kinematics import atmosphere
+    alt = 40_000 * FT
+    ac = Aircraft.make_blue("B1", "F-35-1",
+                            AircraftState(0.0, 0.0, alt, 0.0, BLUE_ENERGY.min_speed_mps))
+    ac.params = F35_PARAMS
+    ac.cmd_speed_mps, ac.cmd_alt_m = BLUE_ENERGY.min_speed_mps, alt
     h0 = ac.state.heading_rad
-    for _ in range(20):                       # 1 s more at the floor
+    for _ in range(20):                       # 1 s at the floor
         ac.cmd_heading_rad = ac.state.heading_rad + math.pi / 2
         integrate_aircraft(ac, 0.05)
     rate = abs(math.degrees(_angle_diff(ac.state.heading_rad, h0)))
-    assert ac.state.speed_mps == pytest.approx(BLUE_ENERGY.min_speed_mps)
+    assert ac.state.speed_mps >= BLUE_ENERGY.min_speed_mps
     assert rate < 5.0, rate
+    assert ac.state.alt < alt - 10.0
 
 
 # ----------------------------------------------------------------- B: loft ---
