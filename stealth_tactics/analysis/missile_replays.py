@@ -2,11 +2,13 @@
 
 Blue F-35 and Red Su-27 co-altitude at 40,000 ft, both Mach 0.9, starting
 60 NM apart head-on. Blue fires ONE missile on its own fire-control track at
-``shot_nm`` (default 45 NM, inside the ~49 NM head-on Rmax) and keeps flying at
+``shot_nm`` (default 45 NM, inside the head-on Rmax: ~49 NM before Spec 8 loft,
+~82 NM with it) and keeps flying at
 Red to support. Red (weapons off) reacts at launch:
 
 - ``headon``: keeps coming (long head-on shot);
-- ``drag``: 3 g level turn to cold (away from the launch point), no speed change;
+- ``drag``: 3 g level turn to cold (away from the launch point), commanded speed unchanged
+  (Spec 8 energy model: the turn bleeds speed, thrust then recovers it);
 - ``beam``: 3 g level turn to put the shooter on its beam (90 deg), holds it.
 """
 
@@ -29,7 +31,7 @@ from stealth_tactics.sim.world import SimConfig, World
 FT = 0.3048
 G0 = 9.80665
 KINDS = {"headon": "Red keeps coming (hot)",
-         "drag": "Red turns cold at launch (3 g, no acceleration)",
+         "drag": "Red turns cold at launch (3 g, same commanded speed)",
          "beam": "Red turns to beam at launch (3 g) and holds it"}
 
 
@@ -55,8 +57,13 @@ def run_missile_replay(kind: str = "headon", seed: int = 2, shot_nm: float = 45.
     r1 = Aircraft.make_red("R1", "Red-1", AircraftState(0.0, start_nm * NM_M, alt, math.pi, v))
     r1.type_name = "Su-27"
     # 3 g level turn at this speed (Red's own 13 deg/s would be ~6 g)
+    # Spec 8: the energy integrator ignores max_turn_rate_deg_s and caps the load
+    # factor instead; a level turn with turn_g of horizontal acceleration needs
+    # n = sqrt(1 + turn_g^2). (The turn now bleeds speed; thrust recovers it.)
     r1.params = dataclasses.replace(r1.params, max_turn_rate_deg_s=math.degrees(turn_g * G0 / v),
-                                    max_speed_mps=max(v, r1.params.max_speed_mps))
+                                    max_speed_mps=max(v, r1.params.max_speed_mps),
+                                    energy=dataclasses.replace(
+                                        r1.params.energy, n_max=math.sqrt(1.0 + turn_g ** 2)))
     b1.params = dataclasses.replace(b1.params, max_speed_mps=max(v, b1.params.max_speed_mps))
     st: Dict = {"cold_hdg": None, "beam_hdg": None}
     rep_box: Dict = {}

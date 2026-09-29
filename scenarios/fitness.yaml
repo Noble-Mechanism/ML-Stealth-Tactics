@@ -28,3 +28,11 @@ shot: -2.0
 no_engagement_loss_only: true
 no_engagement: -300.0
 std_coef: 0.2
+
+# Spec 8 D: Blue–Blue deconfliction. A pair is in conflict at a 1 s sample when
+# horizontal range < deconflict_nm AND altitude difference < deconflict_alt_ft.
+# Each such second adds deconflict_per_s (capped at deconflict_cap per fight).
+deconflict_nm: 5.0
+deconflict_alt_ft: 5000.0
+deconflict_per_s: -1.0
+deconflict_cap: -50.0

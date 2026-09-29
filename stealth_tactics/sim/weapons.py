@@ -13,7 +13,8 @@ from .aircraft import (Aircraft, AircraftState, distance_3d, bearing_to, _angle_
                        ground_alt_m)
 from .tracks import TrackStore
 from .sensor_config import DEFAULT_SENSOR_CONFIG, SensorConfig, NM_M
-from .missile_kinematics import KinState, advance_one, derived, speed_of_sound
+from .missile_kinematics import (KinState, advance_one, derived, loft_active, lofted_aim,
+                                 speed_of_sound)
 
 # Per-observer track stores (Spec 1). A plain set is accepted for backward
 # compatibility and is interpreted as the set of FIRE-CONTROL target ids.
@@ -93,6 +94,10 @@ class Missile:
     a_pole_m: Optional[float] = None     # shooter-target range when the seeker goes active
     f_pole_m: Optional[float] = None     # shooter-target range at the end (None: shooter dead)
     end_t: Optional[float] = None
+    # Spec 8 B-d: continuous seconds of post-burnout opening (reset when closing)
+    opening_s: float = 0.0
+    # Spec 8 B1: range-to-aim when the loft bias started (decays to 0 at handoff)
+    loft_r0_m: Optional[float] = None
 
     @property
     def speed_mps(self) -> float:
@@ -128,40 +133,60 @@ class WeaponModel:
         self.rng = rng
         self.cfg = config or DEFAULT_SENSOR_CONFIG
         self.kcfg = self.cfg.missile_kinematics
+        self.kcfg_red = self.cfg.kinematics_for("Red")
         self._kd = derived(self.kcfg)
+        self._kd_red = derived(self.kcfg_red)
         self._envelope = None
+        self._envelope_red = None
         self._prev_pos: Dict[str, Tuple[float, float, float, float]] = {}
         self._missile_seq = 0
         # Weapon events since last drain (World moves them into its event log)
         self.events: List[dict] = []
         self._by_id: Dict[str, Aircraft] = {}
 
-    @property
-    def envelope(self):
-        """Rmax / Rne lookup table (built from the fly-out model, cached)."""
+    def kinematics(self, coalition: str):
+        """MissileKinematicsConfig for a coalition (Spec 8 E stub)."""
+        return self.kcfg_red if coalition == "Red" else self.kcfg
+
+    def _derived(self, coalition: str):
+        return self._kd_red if coalition == "Red" else self._kd
+
+    def envelope_for_coalition(self, coalition: str):
+        from .missile_envelope import get_envelope
+        if coalition == "Red":
+            if self._envelope_red is None:
+                self._envelope_red = get_envelope(self.kcfg_red)
+            return self._envelope_red
         if self._envelope is None:
-            from .missile_envelope import get_envelope
             self._envelope = get_envelope(self.kcfg)
         return self._envelope
 
+    @property
+    def envelope(self):
+        """Rmax / Rne lookup table for the default (Blue) missile."""
+        return self.envelope_for_coalition("Blue")
+
     def rmax_m(self, shooter: Aircraft, target: Aircraft) -> float:
         """Table Rmax (m) for the current shooter/target geometry."""
-        return self.envelope.rmax_for_states(shooter.state, target.state)
+        return self.envelope_for_coalition(shooter.coalition.value).rmax_for_states(
+            shooter.state, target.state)
 
     def rne_m(self, shooter: Aircraft, target: Aircraft) -> float:
         """Table no-escape range (target turns cold at launch), metres."""
-        return self.envelope.for_states(shooter.state, target.state)[1]
+        return self.envelope_for_coalition(shooter.coalition.value).for_states(
+            shooter.state, target.state)[1]
 
     def envelope_for(self, shooter: Aircraft, target: Aircraft) -> Tuple[float, float]:
         """(Rmax, Rne) in metres; candidate network inputs (Spec 5)."""
-        return self.envelope.for_states(shooter.state, target.state)
+        return self.envelope_for_coalition(shooter.coalition.value).for_states(
+            shooter.state, target.state)
 
     def can_shoot(self, shooter: Aircraft, target: Aircraft) -> bool:
         if not shooter.state.alive or not target.state.alive:
             return False
         if shooter.ammo <= 0:
             return False
-        kc = self.kcfg
+        kc = self.kinematics(shooter.coalition.value)
         d = distance_3d(shooter.state, target.state)
         if d < kc.min_launch_range_m or d > self.rmax_m(shooter, target):
             return False
@@ -179,7 +204,7 @@ class WeaponModel:
     def spawn(self, shooter: Aircraft, target: Aircraft,
               remote_source: Optional[str] = None) -> Missile:
         """Create a missile without launch gating (analysis scenarios, tests)."""
-        kc = self.kcfg
+        kc = self.kinematics(shooter.coalition.value)
         shooter.ammo -= 1
         self._missile_seq += 1
         mid = f"M{self._missile_seq:04d}"
@@ -301,7 +326,7 @@ class WeaponModel:
         shooter = self._by_id.get(m.shooter_id) if self._by_id else None
         if shooter is not None and shooter.state.alive:
             m.a_pole_m = distance_3d(shooter.state, tgt.state)
-        rng_nm = self.kcfg.active_range_m / NM_M
+        rng_nm = self.kinematics(m.coalition).active_range_m / NM_M
         self._event(t, "autonomous", m,
                     f"{m.id} active (within {rng_nm:.0f} NM of {m.target_id}; Mach "
                     f"{m.mach:.2f}; Pk factor {m.pk_factor:.2f}, aim error {err:.0f} m, "
@@ -363,7 +388,7 @@ class WeaponModel:
         any qualifying flightmate counts), Pk x support_drop_factor once."""
         if not m.sup_at_active or m.support_dropped:
             return
-        kc = self.kcfg
+        kc = self.kinematics(m.coalition)
         sup = self.pick_supporter(m, tgt, aircraft_by_id, tracks)
         if sup is not None:
             m.post_sup_last_tf = m.pos.tf
@@ -392,14 +417,6 @@ class WeaponModel:
         tracks = tracks or {}
         self._by_id = aircraft_by_id
         killed: List[str] = []
-        kc = self.kcfg
-        kd = self._kd
-        nsub = max(1, int(math.ceil(dt / kc.dt_s - 1e-9)))
-        h = dt / nsub
-        act2 = kc.active_range_m ** 2
-        fuze2 = kc.proximity_fuze_m ** 2
-        over2 = kc.overshoot_range_m ** 2
-        burn = kc.burn_time_s + 1e-9
         for m in missiles:
             if not m.alive:
                 continue
@@ -409,6 +426,15 @@ class WeaponModel:
                 m.outcome = m.outcome or "target_dead"
                 self._record_end(m, t)
                 continue
+
+            kc = self.kinematics(m.coalition)
+            kd = self._derived(m.coalition)
+            nsub = max(1, int(math.ceil(dt / kc.dt_s - 1e-9)))
+            h = dt / nsub
+            act2 = kc.active_range_m ** 2
+            fuze2 = kc.proximity_fuze_m ** 2
+            over2 = kc.overshoot_range_m ** 2
+            burn = kc.burn_time_s + 1e-9
 
             k, ts = m.pos, tgt.state
             dist = math.sqrt((ts.x - k.x) ** 2 + (ts.y - k.y) ** 2 + (ts.alt - k.alt) ** 2)
@@ -451,10 +477,18 @@ class WeaponModel:
                 r0x, r0y, r0z = tx0 - k.x, ty0 - k.y, tz0 - k.alt
                 if coast and not m.autonomous:
                     tau = tsu0 + j * h
-                    advance_one(k, spx + svx * tau, spy + svy * tau, spz + svz * tau,
-                                svx, svy, svz, h, kd)
+                    ax, ay, az = spx + svx * tau, spy + svy * tau, spz + svz * tau
+                    avx, avy, avz = svx, svy, svz
                 else:
-                    advance_one(k, tx0, ty0, tz0, tvx, tvy, tvz, h, kd)
+                    ax, ay, az = tx0, ty0, tz0
+                    avx, avy, avz = tvx, tvy, tvz
+                if m.loft_r0_m is None and kc.loft_enabled:
+                    r_aim = math.sqrt((ax - k.x) ** 2 + (ay - k.y) ** 2 + (az - k.alt) ** 2)
+                    if loft_active(r_aim, k.tf, m.autonomous, kc):
+                        m.loft_r0_m = r_aim
+                ax, ay, az, loft_on = lofted_aim(
+                    k.x, k.y, k.alt, ax, ay, az, k.tf, kc, m.autonomous, m.loft_r0_m)
+                advance_one(k, ax, ay, az, avx, avy, avz, h, kd)
                 tx1, ty1, tz1 = tx0 + tvx * h, ty0 + tvy * h, tz0 + tvz * h
                 r1x, r1y, r1z = tx1 - k.x, ty1 - k.y, tz1 - k.alt
                 V = math.sqrt(k.vx * k.vx + k.vy * k.vy + k.vz * k.vz)
@@ -493,19 +527,30 @@ class WeaponModel:
                                   math.sqrt(rng2))
                         ended = True
                         break
-                    if kc.defeat_on_opening and (r1x * (tvx - k.vx) + r1y * (tvy - k.vy)
-                                                 + r1z * (tvz - k.vz)) > 0.0:
+                    opening = (r1x * (tvx - k.vx) + r1y * (tvy - k.vy)
+                               + r1z * (tvz - k.vz)) > 0.0
+                    if kc.defeat_on_opening and opening:
                         rr = math.sqrt(rng2)
                         if rng2 < over2:
+                            # miss_overshoot stays immediate
                             self._end(m, t, "miss_overshoot",
                                       f"{m.id} overshoot: passed {rr:.0f} m from "
                                       f"{m.target_id} outside the fuze", rr)
+                            ended = True
+                            break
+                        # Spec 8 B-d: grace window; never during loft bias
+                        if loft_on:
+                            m.opening_s = 0.0
                         else:
-                            self._end(m, t, "defeat_opening",
-                                      f"{m.id} kinematic defeat: no longer closing "
-                                      f"(Mach {m.mach:.2f}, {rr / NM_M:.1f} NM)", rr)
-                        ended = True
-                        break
+                            m.opening_s += h
+                            if m.opening_s >= kc.opening_grace_s:
+                                self._end(m, t, "defeat_opening",
+                                          f"{m.id} kinematic defeat: no longer closing "
+                                          f"(Mach {m.mach:.2f}, {rr / NM_M:.1f} NM)", rr)
+                                ended = True
+                                break
+                    else:
+                        m.opening_s = 0.0
                 m.remaining_time_s -= h
                 if m.remaining_time_s <= 1e-9:
                     self._end(m, t, "timeout",
@@ -535,7 +580,7 @@ class WeaponModel:
             m.f_pole_m = distance_3d(sh.state, tg.state)
 
     def _fuze(self, m: Missile, tgt: Aircraft, t: float, killed: List[str]) -> None:
-        kc = self.kcfg
+        kc = self.kinematics(m.coalition)
         m.f_endgame = kc.endgame_factor(m.mach)
         m.pk_final = m.pk * m.f_endgame
         m.mach_end = m.mach

@@ -20,6 +20,8 @@ BD_NAMES = ("radar_off_share", "launch_r_rmax", "shots", "closest_approach",
 BD_SCALE = {"launch_r_rmax": 1.5, "shots": 8.0, "closest_approach": 150_000.0,
             "altitude": 15_000.0, "spread": 40_000.0, "first_shot_t": 360.0}
 AWAY_DEG = 70.0
+FT_M = 0.3048
+NM_M = 1852.0
 
 
 class BDRecorder:
@@ -39,7 +41,12 @@ class BDRecorder:
         # spec 7: heading off the bearing to the nearest live Red at each jet's
         # last whole-second sample (egress test for the loss weight)
         self.last_off_deg: Dict[str, float] = {}
+        # Spec 8 D: Blue–Blue conflict-pair-seconds (1 s samples, summed over pairs)
+        self.deconflict_s: float = 0.0
         self._next = 0.0
+        # thresholds filled from fitness weights on first score (or defaults)
+        self.deconflict_nm: float = 5.0
+        self.deconflict_alt_ft: float = 5000.0
 
     def __call__(self, world) -> None:
         self.inner(world)
@@ -76,6 +83,15 @@ class BDRecorder:
                   for i, a in enumerate(blues) for c in blues[i + 1:]]
             self.spread_sum += float(np.mean(ds))
             self.spread_n += 1
+            # Spec 8 D: AND rule — horizontal < deconflict_nm AND alt diff < deconflict_alt_ft
+            lim_h = self.deconflict_nm * NM_M
+            lim_v = self.deconflict_alt_ft * FT_M
+            # Counts conflict-PAIR-seconds (each pair in conflict adds 1 per sample).
+            for i, a in enumerate(blues):
+                for c in blues[i + 1:]:
+                    if (math.hypot(a.state.x - c.state.x, a.state.y - c.state.y) < lim_h
+                            and abs(a.state.alt - c.state.alt) < lim_v):
+                        self.deconflict_s += 1.0
 
     def egress_by_jet(self, off_deg: float) -> Dict[str, bool]:
         """Blue jet id -> heading more than *off_deg* off the nearest live Red

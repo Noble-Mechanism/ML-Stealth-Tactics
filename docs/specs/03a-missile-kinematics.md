@@ -255,3 +255,27 @@ Launch on remote at 0.85 / 0.75 / 0.65 × Rmax (23.5 / 20.6 / 17.3 NM):
   same as the pre-fix code timed on the same machine at the same time. The
   earlier 0.41–0.45 s figure was measured under a different machine load.
 - Smoke evolve (pop 12, gens 3, seed 42): best fitness 213 (unchanged), 15.7 s.
+
+
+## Spec 8 loft update (2026-09-28, numbers re-verified 2026-09-29)
+
+Loft-bias midcourse is now **on by default** (`loft_angle_deg=20`, handoff 25 NM,
+settle 1 s): the aim point is raised 20° when the loft starts, decaying linearly
+to 0 at the handoff. Opening defeat waits `opening_grace_s=3` and never fires
+while loft bias is active. Aspect bins are 10° to 120° (were 20°). Rebuilt
+Rmax / Rne table (`ENGINE_VERSION` `"8.1"`, ~6 min on 8 cores).
+
+Rmax, shooter Mach 0.9, target Mach 0.9 level, co-altitude (sim path, NM):
+
+| altitude | target | loft off (3a) | loft on (Spec 8) |
+|---|---|---|---|
+| 40,000 ft | head-on | 49.4 | **82.5** |
+| 40,000 ft | beam | 29.6 | 34.8 |
+| 40,000 ft | turn cold at launch | 24.4 | 24.4 |
+| 40,000 ft | already cold | 21.1 | 21.1 |
+| 25,000 ft | head-on | 28.8 | 33.0 |
+| 15,000 ft | head-on | 20.5 | 20.5 |
+
+Loft only acts while range-to-aim is beyond the 25 NM handoff, so shots whose
+Rmax is under ~25 NM (low altitude, cold / turn-cold) are unchanged. The gain is
+at high altitude. See `docs/specs/08-kinematics-realism.md`.

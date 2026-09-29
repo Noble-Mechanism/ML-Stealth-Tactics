@@ -339,9 +339,9 @@ def cmd_missile_sweep(args: argparse.Namespace) -> int:
     t0 = time.time()
     kc = DEFAULT_SENSOR_CONFIG.missile_kinematics
     # Calibration check: 40,000 ft, shooter and target Mach 0.9
-    targets = {"hot": 50.0, "beam": None, "turncold": 24.0, "cold": 20.0}
-    cal = ["Calibration (40,000 ft, shooter M0.9, target M0.9 level; sim path, NM):",
-           f"  cd_scale = {kc.cd_scale}, gravity/lift = {kc.gravity}, dt = {kc.dt_s} s",
+    targets = {"hot": 82.5, "beam": 34.8, "turncold": 24.4, "cold": 21.1}
+    cal = ["Calibration (40,000 ft, shooter M0.9, target M0.9 level; sim path, NM; Spec 8 loft on):",
+           f"  cd_scale = {kc.cd_scale}, gravity/lift = {kc.gravity}, loft = {kc.loft_enabled} ({kc.loft_angle_deg} deg), dt = {kc.dt_s} s",
            f"  {'target':<22} {'Rmax':>6} {'goal':>6} {'proto':>6}"]
     proto = {"hot": 49.0, "beam": 28.8, "turncold": 23.7, "cold": 20.4}
     for b in ms.BEHAVIORS:
@@ -381,6 +381,31 @@ def cmd_missile_sweep(args: argparse.Namespace) -> int:
         (out_dir / "missile_replays.txt").write_text("\n".join(log), encoding="utf-8")
         print("\n".join(log))
     print(f"missile-sweep done in {time.time() - t0:.0f} s -> {out_dir}")
+    return 0
+
+
+def cmd_aircraft_sweep(args: argparse.Namespace) -> int:
+    """Spec 8: jet energy bleed calibration (A-d gate)."""
+    from stealth_tactics.analysis.aircraft_sweep import bleed_run, format_bleed, gate_ok
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    reps = []
+    lines = ["Spec 8 jet energy bleed calibration (A-d: Mach 0.9 -> ~0.7 in ~20 s "
+             "at 40 kft, 3-4 g).", ""]
+    for n in args.n_max:
+        rep = bleed_run(n_max=n, alt_ft=args.alt_ft, start_mach=args.mach, t_s=args.time)
+        reps.append(rep)
+        block = format_bleed(rep)
+        lines.append(block)
+        ok = gate_ok(rep)
+        lines.append(f"  A-d gate (0.60-0.80): {'PASS' if ok else 'FAIL'}")
+        lines.append("")
+        print(block)
+        print(f"  A-d gate: {'PASS' if ok else 'FAIL'}")
+    nl = chr(10)
+    (out_dir / "aircraft_bleed.txt").write_text(nl.join(lines) + nl, encoding="utf-8")
+    print(f"aircraft-sweep -> {out_dir / 'aircraft_bleed.txt'}")
     return 0
 
 
@@ -653,6 +678,17 @@ def main(argv: list[str] | None = None) -> int:
     p_ms.add_argument("-o", "--out", default=None)
     p_ms.set_defaults(func=cmd_missile_sweep)
 
+    p_as = sub.add_parser("aircraft-sweep",
+                          help="Spec 8: jet energy bleed calibration (A-d gate)")
+    p_as.add_argument("--n-max", type=float, nargs="+", default=[3.0, 3.5, 4.0],
+                      help="load-factor caps to sweep (default 3 3.5 4)")
+    p_as.add_argument("--alt-ft", type=float, default=40000.0)
+    p_as.add_argument("--mach", type=float, default=0.9)
+    p_as.add_argument("--time", type=float, default=20.0)
+    p_as.add_argument("-o", "--out", default=None)
+    p_as.set_defaults(func=cmd_aircraft_sweep)
+
+
     p_dr = sub.add_parser("defense-replays",
                           help="Spec 3 replays A-F: Red defense, Blue test reaction, SSA")
     p_dr.add_argument("--scenario", default="all",
@@ -769,6 +805,7 @@ def main(argv: list[str] | None = None) -> int:
                                "sensor-replays": "artifacts/spec1",
                                "datalink-replays": "artifacts/spec2",
                                "missile-sweep": "artifacts/spec3a",
+                               "aircraft-sweep": "artifacts/spec8",
                                "defense-replays": "artifacts/spec3",
                                "defense-stats": "artifacts/spec3",
                                "presentation-stats": "artifacts/spec4",

@@ -65,16 +65,21 @@ def run_policy_fight(policy, pdict: dict, max_time_s: float = 360.0, record: boo
     from stealth_tactics.presentation_runner import run_presentation
     from stealth_tactics.scenarios.presentation import DEFAULT_PRESENTATION_CONFIG
     from .novelty import BDRecorder
+    from stealth_tactics.fitness import missile_outcome_counts
     w = fitness if fitness is not None else load_weights()
     holder = {}
 
     def fac(ids):
-        holder["r"] = BDRecorder(NetworkBlueController(policy, ids), ids)
+        r = BDRecorder(NetworkBlueController(policy, ids), ids)
+        r.deconflict_nm = float(w.get("deconflict_nm", 5.0))
+        r.deconflict_alt_ft = float(w.get("deconflict_alt_ft", 5000.0))
+        holder["r"] = r
         return holder["r"]
     pcfg = replace(DEFAULT_PRESENTATION_CONFIG, max_time_s=max_time_s)
     res = run_presentation(pdict, cfg=pcfg, record=record, blue_factory=fac)
     rec = holder["r"]
-    terms = fight_terms(res, len(pdict["red_jets"]), rec.egress_by_jet(w["egress_off_deg"]), w)
+    terms = fight_terms(res, len(pdict["red_jets"]), rec.egress_by_jet(w["egress_off_deg"]), w,
+                        deconflict_s=rec.deconflict_s)
     shots = res.shots
     summ = {"kills": res.blue_kills, "losses": res.red_kills,
             "egress_losses": terms["n_egress_losses"], "escaped": terms["n_escaped"],
@@ -83,7 +88,9 @@ def run_policy_fight(policy, pdict: dict, max_time_s: float = 360.0, record: boo
             "blue_hits": sum(1 for s in shots if s["coalition"] == "Blue"
                              and s["outcome"] == "hit"),
             "red_shots": sum(1 for s in shots if s["coalition"] == "Red"),
-            "end_reason": res.end_reason, "time_s": res.time_s}
+            "end_reason": res.end_reason, "time_s": res.time_s,
+            "deconflict_s": terms["deconflict_s"],
+            "missile_outcomes": missile_outcome_counts(shots)}
     return terms["total"], rec.raw(res), summ, (res if record else None)
 
 

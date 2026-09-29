@@ -12,7 +12,12 @@ ACMI 2.2 for visual playback.
 - **Point-mass** kinematics in local ENU (East, North, Up) meters.
 - State per aircraft: `x, y, alt, heading, speed, alive`.
 - Heading convention: **0 = North**, increasing **clockwise** (aviation/TacView yaw).
-- Limits: max turn rate (°/s), climb rate (m/s), speed band, altitude band.
+- Limits (Spec 8): n-limited turn (energy model), climb rate (m/s), Mach/altitude
+  ceilings, min speed. Drag + density thrust replace the old fixed turn rate /
+  flat ±30 m/s² accel. Separate Blue / Red `AircraftEnergyConfig` placeholders.
+  Soft speed floor: at `min_speed_mps` a jet can only pull the load factor its
+  thrust sustains (no free max-g turning at the floor); turn-direction
+  hysteresis near a 180° command.
 - **Ground (Spec 3):** flat ground at 0 m (`aircraft.GROUND_ALT_M`); hard
   **100 m AGL floor** for every aircraft (`ALT_FLOOR_AGL_M`, enforced in
   `integrate_aircraft`). A missile that reaches the ground ends with outcome `ground`.
@@ -59,7 +64,8 @@ All sensor numbers (unclassified placeholders) live in
 ## Weapons (Spec 3a — see `docs/specs/03a-missile-kinematics.md`)
 
 Blue and Red carry the **same missile**. All numbers are in
-`SensorConfig.missile_kinematics` (`MissileKinematicsConfig`) and
+`SensorConfig.missile_kinematics` (`MissileKinematicsConfig`; optional
+`missile_kinematics_red` stub, Spec 8 E, currently None = same missile) and
 `SensorConfig.missile` (`MissileCoastConfig`, coast rules) in
 `stealth_tactics/sim/sensor_config.py`. Prototype calibration values, not
 sourced missile data.
@@ -71,14 +77,15 @@ sourced missile data.
   drag `q S Cd0(M) cd_scale` with 1976 US Standard Atmosphere, **cd_scale 1.10**
   (retuned from the prototype's 1.25 because the sim adds lift = weight);
   induced drag `0.08 (n m g)^2/(q S)`; `n_max = min(40, q S 12/(m g))`.
-- **Guidance:** PN, N = 4, no loft. Midcourse on the supported / coasting aim
-  point; after going active (15 NM from the true target) on the target. Target
-  motion inside a world step is the chord between its start and end positions
-  (captures climbs and turns).
-- **Kinematic defeat** after burnout: `defeat_speed` (< Mach 1.2) or
-  `defeat_opening` (no longer closing; `miss_overshoot` if it passed within
-  1 km outside the 50 m fuze). `timeout` = 180 s safety cap (3a fix, was 120 s,
-  so energy rather than the cap sets Rmax).
+- **Guidance (Spec 8):** PN, N = 4, with a simple loft-bias midcourse (default
+  on, 20° at loft start decaying linearly to 0 at the 25 NM handoff). After
+  handoff / active (15 NM),
+  pure PN. Target motion inside a world step is the chord between its start
+  and end positions (captures climbs and turns).
+- **Kinematic defeat** after burnout: `defeat_speed` (< Mach 1.2, immediate) or
+  `defeat_opening` after **3 s** continuous opening and never while loft bias
+  is active (Spec 8 B-d); `miss_overshoot` if it passed within 1 km outside
+  the 50 m fuze (immediate). `timeout` = 180 s safety cap.
 - **Launch gate:** ammo, 500 m minimum, ≤ 60° off the nose, fire-control track
   (own, or remote for Blue) and range ≤ **table Rmax** (`sim/missile_envelope.py`).
   The table (altitude × shooter Mach × target aspect × target Mach × signed

@@ -1,14 +1,15 @@
-"""Spec 7 fitness v1 (approved by Rusty 2026-09-26).
+"""Spec 7 fitness v1 (approved by Rusty 2026-09-26) + Spec 8 deconfliction.
 
 All weights live in ``scenarios/fitness.yaml`` (or a file given per run) and
 are overridable key by key. ``fight_fitness`` scores one fight;
 ``aggregate`` turns a network's per-fight scores into its fitness
-(mean - std_coef x std). See ``docs/specs/07-fitness.md``.
+(mean - std_coef x std). See ``docs/specs/07-fitness.md`` and
+``docs/specs/08-kinematics-realism.md`` (D).
 """
 
 from __future__ import annotations
 
-import math
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional, Sequence
 
@@ -23,6 +24,11 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "egress_off_deg": 120.0, "escape": 10.0, "escape_only_at_time_cap": True,
     "red_winchester_depart": 25.0, "shot": -2.0, "no_engagement_loss_only": True,
     "no_engagement": -300.0, "std_coef": 0.2,
+    # Spec 8 D: Blue–Blue deconfliction (AND rule: < deconflict_nm AND < deconflict_alt_ft)
+    "deconflict_nm": 5.0,
+    "deconflict_alt_ft": 5000.0,
+    "deconflict_per_s": -1.0,
+    "deconflict_cap": -50.0,
 }
 
 
@@ -64,9 +70,11 @@ def parse_overrides(items: Iterable[str]) -> dict:
     return out
 
 
-def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping) -> dict:
+def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping,
+                deconflict_s: float = 0.0) -> dict:
     """Per-term breakdown of one fight. ``egress_by_jet``: Blue jet id -> was
-    it egressing at its last sample (from the behaviour recorder)."""
+    it egressing at its last sample (from the behaviour recorder).
+    ``deconflict_s``: Blue–Blue conflict-pair-seconds (Spec 8 D)."""
     kill_ids = [e["target"] for e in res.events if e.get("type") == "kill"]
     blue_ids = set(egress_by_jet)
     blue_lost = [k for k in kill_ids if k in blue_ids] if blue_ids else []
@@ -81,23 +89,34 @@ def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping) 
     engaged = shots > 0 or res.blue_kills > 0
     escaped = int(res.blue_alive) if (not w["escape_only_at_time_cap"]
                                       or res.end_reason == "time_cap") else 0
+    # Spec 8 D: per conflict-pair-second, capped
+    per_s = float(w.get("deconflict_per_s", 0.0))
+    cap = float(w.get("deconflict_cap", 0.0))
+    raw_deconf = per_s * float(deconflict_s)
+    if per_s < 0:
+        deconf = max(raw_deconf, cap) if cap < 0 else raw_deconf
+    else:
+        deconf = min(raw_deconf, cap) if cap > 0 else raw_deconf
     t = {"kills": w["kill"] * (w["kill_ref_red"] / max(1, n_red)) * res.blue_kills,
          "losses": w["blue_loss"] * (n_loss - n_egress_loss),
          "egress_losses": w["blue_loss_egress"] * n_egress_loss,
          "escape": w["escape"] * escaped,
          "red_winchester_departs": w["red_winchester_depart"] * len(departed),
          "shots": w["shot"] * shots,
-         "no_engagement": 0.0 if engaged else float(w.get("no_engagement", 0.0))}
+         "no_engagement": 0.0 if engaged else float(w.get("no_engagement", 0.0)),
+         "deconflict": float(deconf)}
     if w["no_engagement_loss_only"] and not engaged:
         t.update(kills=0.0, escape=0.0, red_winchester_departs=0.0, shots=0.0)
-    t["total"] = float(sum(t.values()))
+    t["total"] = float(sum(v for k, v in t.items() if k != "total"))
     t.update(n_losses=n_loss, n_egress_losses=n_egress_loss, n_escaped=escaped,
-             n_red_departs=len(departed), engaged=engaged)
+             n_red_departs=len(departed), engaged=engaged,
+             deconflict_s=float(deconflict_s))
     return t
 
 
-def fight_fitness(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping) -> float:
-    return fight_terms(res, n_red, egress_by_jet, w)["total"]
+def fight_fitness(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping,
+                  deconflict_s: float = 0.0) -> float:
+    return fight_terms(res, n_red, egress_by_jet, w, deconflict_s)["total"]
 
 
 def aggregate(per_fight: Sequence[float], w: Mapping) -> float:
@@ -106,3 +125,33 @@ def aggregate(per_fight: Sequence[float], w: Mapping) -> float:
     if a.size == 0:
         return 0.0
     return float(a.mean() - float(w.get("std_coef", 0.2)) * a.std())
+
+
+def missile_outcome_counts(shots: Sequence[Mapping]) -> dict:
+    """Spec 8 C: Blue-as-target and Red-as-target outcome counts by label.
+
+    A Blue shot has Red as target (and vice versa). Returns
+    ``{"blue_as_target": {label: n}, "red_as_target": {label: n}}``.
+    """
+    blue_tgt: Counter = Counter()
+    red_tgt: Counter = Counter()
+    for s in shots or []:
+        out = s.get("outcome") or ""
+        if not out or out == "in_flight":
+            continue
+        coal = s.get("coalition")
+        if coal == "Blue":
+            red_tgt[out] += 1
+        elif coal == "Red":
+            blue_tgt[out] += 1
+    return {"blue_as_target": dict(blue_tgt), "red_as_target": dict(red_tgt)}
+
+
+def merge_outcome_counts(parts: Sequence[Mapping]) -> dict:
+    """Sum outcome rollups across fights."""
+    blue: Counter = Counter()
+    red: Counter = Counter()
+    for p in parts or []:
+        blue.update(p.get("blue_as_target") or {})
+        red.update(p.get("red_as_target") or {})
+    return {"blue_as_target": dict(blue), "red_as_target": dict(red)}

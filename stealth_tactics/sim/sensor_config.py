@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 F35_KEY = "F-35"
 RED_KEY = "RedFighter"
@@ -235,6 +235,36 @@ class MissileCoastConfig:
                    * min(t_gap_s / self.coast_time_ref_s, 1.0)))
 
 
+
+# ------------------------------------------------ aircraft energy (Spec 8) ---
+@dataclass(frozen=True)
+class AircraftEnergyConfig:
+    """Spec 8 point-mass jet energy model. Unclassified placeholders, NOT real
+    F-35 / adversary performance. Separate Blue / Red sets (A-b); single n_max (A-c)."""
+    mass_kg: float = 18000.0
+    S_m2: float = 40.0
+    Cd0: float = 0.025
+    k_induced: float = 0.08
+    n_max: float = 7.0
+    T_sl_N: float = 110000.0
+    thrust_density_exp: float = 0.7
+    max_mach: float = 1.2
+    max_alt_m: float = 15000.0
+    min_speed_mps: float = 90.0
+
+
+BLUE_ENERGY = AircraftEnergyConfig(
+    mass_kg=18000.0, S_m2=40.0, Cd0=0.025, k_induced=0.08, n_max=7.0,
+    T_sl_N=110000.0, thrust_density_exp=0.7, max_mach=1.2, max_alt_m=15000.0,
+    min_speed_mps=90.0,
+)
+RED_ENERGY = AircraftEnergyConfig(
+    mass_kg=18000.0, S_m2=40.0, Cd0=0.028, k_induced=0.08, n_max=8.0,
+    T_sl_N=130000.0, thrust_density_exp=0.7, max_mach=1.4, max_alt_m=15000.0,
+    min_speed_mps=85.0,
+)
+
+
 # ------------------------------------------------ missile kinematics (3a) ---
 @dataclass(frozen=True)
 class MissileKinematicsConfig:
@@ -264,13 +294,24 @@ class MissileKinematicsConfig:
     g_max: float = 40.0
     # Lift carries the missile's weight (holds altitude unless guidance climbs/dives)
     gravity: bool = True
-    # Proportional navigation gain (no lofting)
+    # Proportional navigation gain
     pn_gain: float = 4.0
+    # Spec 8 B: simple loft-bias midcourse (default on). Bias aim upward while
+    # range-to-aim > loft_handoff_m and tf past loft_settle_s; linear decay to 0
+    # at handoff. After handoff / once inside active range, pure PN.
+    loft_enabled: bool = True
+    loft_angle_deg: float = 20.0
+    loft_handoff_m: float = 25.0 * NM_M
+    loft_settle_s: float = 1.0
+    # Spec 8 B-d: defeat_opening only after this many continuous seconds of
+    # opening, and never while loft bias is still active.
+    opening_grace_s: float = 3.0
     # Seeker goes active this far from the TRUE target (midcourse -> terminal)
     active_range_m: float = 15.0 * NM_M
-    # Kinematic defeat (after burnout): below min Mach, or opening from the target.
-    # An opening missile closer than overshoot_range_m passed the target outside
-    # the fuze radius and is labelled miss_overshoot instead of defeat_opening.
+    # Kinematic defeat (after burnout): below min Mach (immediate), or opening
+    # from the target after opening_grace_s of continuous opening (Spec 8 B-d;
+    # never while loft bias is active). An opening missile closer than
+    # overshoot_range_m is miss_overshoot (immediate).
     defeat_min_mach: float = 1.2
     defeat_on_opening: bool = True
     overshoot_range_m: float = 1000.0
@@ -302,9 +343,12 @@ class MissileKinematicsConfig:
                                     11000.0, 12000.0, 13000.0, 14000.0, 15000.0)
     env_shooter_mach: Tuple[float, ...] = (0.5, 0.7, 0.9, 1.1, 1.3)
     # 3a fix: 20 deg aspect steps to 120 (was 45): Rmax is curved in aspect,
-    # 45 deg steps interpolated up to ~1.9 NM wrong between bins
-    env_aspect_deg: Tuple[float, ...] = (0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0,
-                                         150.0, 180.0)
+    # 45 deg steps interpolated up to ~1.9 NM wrong between bins.
+    # Spec 8: 10 deg steps to 120. Loft puts a cliff in Rmax vs aspect (full-
+    # loft shots reach ~60+ NM at <=60 deg aspect, ~30-40 NM past it); 20 deg
+    # bins over-read beam / lag Rmax by up to ~11 NM near 40 kft.
+    env_aspect_deg: Tuple[float, ...] = (0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0,
+                                         80.0, 90.0, 100.0, 110.0, 120.0, 150.0, 180.0)
     env_target_mach: Tuple[float, ...] = (0.5, 0.9, 1.3)
     # signed off-nose bins: 15 deg near the nose (Rmax is flat there), 5-10 deg
     # toward the 60 deg launch limit, denser on the lag side where Rmax bends
@@ -316,7 +360,7 @@ class MissileKinematicsConfig:
                                            40.0, 50.0, 55.0, 60.0, 75.0)
     env_turn_g: float = 3.0
     env_range_lo_nm: float = 1.0
-    env_range_hi_nm: float = 120.0
+    env_range_hi_nm: float = 140.0
     env_coarse_nm: float = 2.5
     env_tol_nm: float = 0.05
 
@@ -337,8 +381,22 @@ class SensorConfig:
     missile: MissileCoastConfig = field(default_factory=MissileCoastConfig)
     missile_kinematics: MissileKinematicsConfig = field(
         default_factory=MissileKinematicsConfig)
+    # Spec 8 E: per-coalition missile hook. None => Red uses missile_kinematics
+    # (same missile). Do not tune a "superior" Red missile until A-D prove
+    # insufficient.
+    missile_kinematics_red: Optional[MissileKinematicsConfig] = None
+    # Spec 8 A: jet energy params keyed by AircraftType value.
+    aircraft_energy: Dict[str, AircraftEnergyConfig] = field(default_factory=lambda: {
+        F35_KEY: BLUE_ENERGY,
+        RED_KEY: RED_ENERGY,
+    })
     # Independent RNG stream salt so sensor draws don't perturb weapon Pk draws.
     rng_salt: int = 0x5E45
+
+    def kinematics_for(self, coalition: str) -> MissileKinematicsConfig:
+        if coalition == RED and self.missile_kinematics_red is not None:
+            return self.missile_kinematics_red
+        return self.missile_kinematics
 
 
 DEFAULT_SENSOR_CONFIG = SensorConfig()

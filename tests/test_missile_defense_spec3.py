@@ -564,8 +564,11 @@ def test_same_seed_same_result_with_defense():
 # ------------------------------------------------------- regression --------
 OLD_F35_TABLE = ((0.0, 0.05), (30.0, 0.10), (60.0, 0.45), (90.0, 0.90), (135.0, 0.55),
                  (180.0, 0.30))
-# Pre-spec-3 code (commit 4a5ebf0), default_4v3, default genome, sim seed 1000+i
-PRE_SPEC3 = {0: "d0507f1f0ba28783", 1: "788ecbec1bc257f4", 2: "0ee9b85ce5879fc4"}
+# Legacy/regression fingerprint (defense off, old RCS table). Originally the
+# pre-spec-3 code (commit 4a5ebf0) byte for byte; re-baselined for Spec 8 (jet
+# energy model, soft speed floor, turn hysteresis, loft, 10 deg aspect bins):
+# the kinematics change every trajectory, so it is now a stability pin.
+PRE_SPEC3 = {0: "1892b7cbd55ba473", 1: "894b020fcfc9a5a3", 2: "8495e9d6202d6deb"}
 
 
 def _fingerprint(seed):
@@ -586,5 +589,5 @@ def _fingerprint(seed):
 
 
 @pytest.mark.parametrize("seed", [0, 1])
-def test_regression_defense_off_legacy_old_rcs_matches_pre_spec3(seed):
+def test_regression_defense_off_legacy_old_rcs_stable(seed):
     assert _fingerprint(seed) == PRE_SPEC3[seed]

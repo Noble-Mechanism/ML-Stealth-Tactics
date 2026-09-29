@@ -352,7 +352,12 @@ def test_replay_c_lead_trail_handoff_and_no_support_coast():
     reduced Pk (or is lost); 'delayed' never shoots before the trail has FC."""
     from stealth_tactics.analysis.datalink_replays import run_lead_trail
 
-    sup = run_lead_trail(seed=1, record=False, variant="support")
+    # Spec 8: with loft the lead's table Rmax here is ~42-45 NM (was ~31 NM), so
+    # a trail 15 NM back is still outside its own 50 NM FC gate for ~40 s after
+    # the shot (>= the 40 s coast timeout). The trail flies 4 NM back so the
+    # scenario still tests a handoff (not the coast timeout).
+    trail_nm = 4.0
+    sup = run_lead_trail(seed=1, record=False, variant="support", trail_nm=trail_nm)
     assert sup.fired_t is not None and sup.shot_range_m is not None
     # Spec 3a: the lead now shoots at the table Rmax (~31 NM, was the fixed
     # 45 km = 24.3 NM), usually before the trail holds its own FC, so a short
@@ -361,11 +366,11 @@ def test_replay_c_lead_trail_handoff_and_no_support_coast():
     assert sup.handoff_to_trail_t is not None
     assert not sup.support_gap or sup.gap_s < CFG.missile.coast_timeout_s
     assert sup.pk_factor == 1.0 and sup.outcome in ("hit", "miss")
-    nos = run_lead_trail(seed=1, record=False, variant="no-support")
+    nos = run_lead_trail(seed=1, record=False, variant="no-support", trail_nm=trail_nm)
     assert nos.support_gap and nos.handoff_to_trail_t is None and nos.gap_s > 0
     assert (nos.outcome in ("lost_coast_timeout", "lost_basket")
             or (nos.pk_factor is not None and nos.pk_factor < 1.0))
-    dly = run_lead_trail(seed=1, record=False, variant="delayed")
+    dly = run_lead_trail(seed=1, record=False, variant="delayed", trail_nm=trail_nm)
     assert dly.trail_fc_t is not None and dly.fired_t >= dly.trail_fc_t
     assert dly.outcome in ("hit", "miss")
     assert dly.shot_range_m <= sup.shot_range_m + 1e-6

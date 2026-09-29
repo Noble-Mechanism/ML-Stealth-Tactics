@@ -37,7 +37,7 @@ def test_approved_values():
 
 
 def test_cache_key_versioned_and_depends_on_off_nose_bins():
-    assert ENGINE_VERSION.startswith("3a.2")
+    assert ENGINE_VERSION.startswith("8.")
     k0 = _cache_key(KC)
     k1 = _cache_key(dataclasses.replace(KC, env_off_nose_deg=(0.0, 30.0)))
     k2 = _cache_key(dataclasses.replace(KC, max_flight_time_s=120.0))
@@ -77,11 +77,13 @@ def test_table_off_nose_values_and_lead_lag_asymmetry():
     env = get_envelope(KC)
     alt = 40_000 * FT
     nm = lambda *a: env.rmax_m(alt, 0.9, *a) / NM_M
-    assert abs(nm(0.0, 0.9, 0.0) - 49.4) < 0.5
-    assert 41.5 < nm(0.0, 0.9, 50.0) < 44.0           # hot, 50 off: ~42.8
+    # Spec 8 loft raises head-on Rmax (49.4 -> ~82.5 NM) and hot 50 off
+    # (~42.8 -> ~71.5 NM); lead/lag asymmetry on the beam remains (~35.1 vs ~17.2).
+    assert abs(nm(0.0, 0.9, 0.0) - 82.5) < 1.0
+    assert 70.5 < nm(0.0, 0.9, 50.0) < 72.5
     assert abs(nm(0.0, 0.9, 50.0) - nm(0.0, 0.9, -50.0)) < 0.1
     lead, lag = nm(90.0, 0.9, 50.0), nm(90.0, 0.9, -50.0)
-    assert lead > lag + 8.0                             # ~29 vs ~17.5 NM
+    assert lead > lag + 8.0
 
 
 @pytest.mark.parametrize("beh,asp,off", [("hot", 0.0, 50.0), ("beam", 90.0, 50.0),
@@ -123,10 +125,10 @@ def test_rne_capped_at_rmax():
 
 # ------------------------------------------------------ flight cap -----------
 def test_180s_cap_lets_energy_set_range():
-    """15 km, shooter Mach 1.3 head-on at 76 NM: fuzes after ~140 s; with the old
-    120 s cap the same shot timed out."""
+    """15 km, shooter Mach 1.3 head-on at 76 NM: fuzes after ~140 s (Spec 8
+    loft: ~122 s); with the old 120 s cap the same shot timed out."""
     s = fly_shot(76.0, 15_000 / FT, 1.3, "hot", target_mach=0.9)
-    assert s.fuzed and 125.0 < s.tof_s < 170.0, (s.outcome, s.tof_s)
+    assert s.fuzed and 120.0 < s.tof_s < 170.0, (s.outcome, s.tof_s)
     old = dataclasses.replace(CFG, missile_kinematics=dataclasses.replace(
         KC, max_flight_time_s=120.0))
     assert fly_shot(76.0, 15_000 / FT, 1.3, "hot", target_mach=0.9, cfg=old).outcome == "timeout"

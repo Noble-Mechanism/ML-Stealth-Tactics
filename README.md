@@ -90,12 +90,14 @@ python -m stealth_tactics datalink-replays --scenario fc-lock -o spec2_outputs
 See `docs/specs/02-track-sharing.md` (parameters in `SensorConfig.datalink`) and
 `docs/specs/02b-coast-and-lock.md` (missile coast, Blue 50 NM FC gate).
 
-## Missile kinematics tools (Spec 3a)
+## Missile / jet kinematics tools (Spec 3a + Spec 8)
 
 ```bash
 # Calibration check, 704-shot sweep (10-60 NM x shooter Mach x altitude x target
 # behavior), Rmax / Rne summary (sim path + lookup table) and 3 TacView replays
 python -m stealth_tactics missile-sweep -o spec3a_outputs
+# Spec 8 A-d: jet energy bleed gate (Mach 0.9 -> ~0.7 in ~20 s at 40 kft, 3-4 g)
+python -m stealth_tactics aircraft-sweep -o artifacts/spec8
 # Off-nose axis of the Rmax table vs the full sim (+ random-grid check)
 python -m stealth_tactics.analysis.off_nose_check
 # Launch on remote: hit rate vs shot range (fraction of table Rmax)
@@ -103,17 +105,16 @@ python -m stealth_tactics datalink-replays --scenario launch-on-remote \
     --shot-frac-sweep 0.95,0.85,0.75,0.65 -o spec3a_outputs
 ```
 
-Both sides carry the same missile: point-mass fly-out (boost, Mach-dependent drag,
-1976 standard atmosphere, induced drag, g limit), PN guidance, kinematic defeat
-below Mach 1.2 / when no longer closing, Pk 0.60 × endgame-energy × support /
+Both sides carry the same missile (Spec 8 E: optional per-coalition stub, Red=Blue): point-mass fly-out (boost, Mach-dependent drag,
+1976 standard atmosphere, induced drag, g limit), PN with Spec 8 loft-bias midcourse (default on), kinematic defeat
+below Mach 1.2 (immediate) or after 3 s continuous opening (never during loft), Pk 0.60 × endgame-energy × support /
 coast factors. Launches are gated by an Rmax lookup table (altitude, shooter
 Mach, target aspect, target Mach, launch angle off the shooter's nose) built
-from the model at first use (~1.5 min on 8 cores in a process pool;
-`STEALTH_TACTICS_ENV_WORKERS=1` for serial, ~9 min) and cached in
+from the model at first use (~6 min on 8 cores in a process pool since Spec 8's
+10° aspect bins; `STEALTH_TACTICS_ENV_WORKERS=1` for serial, much slower) and cached in
 `~/.cache/stealth_tactics` (`STEALTH_TACTICS_CACHE_DIR` to move it, `off` to
 disable). Coast timeout 40 s, flight-time cap 180 s. See
-`docs/specs/03a-missile-kinematics.md` (parameters in
-`SensorConfig.missile_kinematics`).
+`docs/specs/03a-missile-kinematics.md` and `docs/specs/08-kinematics-realism.md`.
 
 ## Missile defense tools (Spec 3)
 

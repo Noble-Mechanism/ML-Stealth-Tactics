@@ -22,6 +22,7 @@ Model (docs/specs/03a-missile-kinematics.md), ENU axes (x East, y North, z Up):
 from __future__ import annotations
 
 import math
+from typing import Optional
 from dataclasses import dataclass
 
 import numpy as np
@@ -245,6 +246,78 @@ def advance_batch(S: dict, ax, ay, az, avx, avy, avz, h: float, d: Derived) -> N
     S["alt"] = S["alt"] + vz * h
     S["mass"] = m - d.mdot * h * bf
     S["tf"] = S["tf"] + h
+
+
+# ---------------------------------------------------------- Spec 8 loft -----
+def loft_active(range_m: float, tf: float, autonomous: bool, c: MissileKinematicsConfig) -> bool:
+    """True while the loft bias is still applied (B-d: no defeat_opening then)."""
+    if not c.loft_enabled or autonomous:
+        return False
+    if tf < c.loft_settle_s:
+        return False
+    return range_m > c.loft_handoff_m
+
+
+def lofted_aim(mx: float, my: float, mz: float, ax: float, ay: float, az: float,
+               tf: float, c: MissileKinematicsConfig, autonomous: bool = False,
+               loft_r0_m: Optional[float] = None):
+    """Bias the aim point upward by a decaying loft angle. Returns
+    (ax, ay, az, loft_is_active).
+
+    The bias is ``loft_angle_deg`` when the loft starts and decays linearly to
+    0 as range-to-aim reaches ``loft_handoff_m`` (spec 8 B1). ``loft_r0_m`` is
+    the range-to-aim when the loft started (the caller stores it on the first
+    active step); None = starts now (full angle).
+
+    Spec 8 build fix: an earlier draft ramped from full angle at 2 x handoff,
+    so shots launched between ~1 and 2 x handoff got a shallow loft that cost
+    energy without reaching thin air: Rmax was not monotone in range (e.g.
+    9 km hot: hits to 35 NM, misses 36-53 NM, hits again 54-64 NM)."""
+    rx, ry, rz = ax - mx, ay - my, az - mz
+    R = math.sqrt(rx * rx + ry * ry + rz * rz)
+    if not loft_active(R, tf, autonomous, c) or R < 1e-6:
+        return ax, ay, az, False
+    r0 = R if loft_r0_m is None else max(loft_r0_m, R)
+    frac = min(1.0, (R - c.loft_handoff_m) / max(r0 - c.loft_handoff_m, 1.0))
+    angle = math.radians(c.loft_angle_deg * frac)
+    rh = math.hypot(rx, ry)
+    if rh < 1e-6:
+        return ax, ay, az + R * math.sin(angle), True
+    el = math.atan2(rz, rh)
+    new_el = el + angle
+    return (mx + R * math.cos(new_el) * (rx / rh),
+            my + R * math.cos(new_el) * (ry / rh),
+            mz + R * math.sin(new_el), True)
+
+
+def lofted_aim_np(mx, my, mz, ax, ay, az, tf, c: MissileKinematicsConfig,
+                  autonomous=None, loft_r0=None):
+    """Vectorised lofted_aim. ``autonomous`` is a bool array or None (all False).
+    ``loft_r0`` (float array, NaN = loft not started yet) holds each shot's
+    range-to-aim at loft start and is updated IN PLACE on the first active
+    step. Returns (ax, ay, az, loft_active_mask)."""
+    rx, ry, rz = ax - mx, ay - my, az - mz
+    R = np.sqrt(rx * rx + ry * ry + rz * rz)
+    auto = np.zeros_like(R, dtype=bool) if autonomous is None else np.asarray(autonomous, bool)
+    active = (c.loft_enabled & (~auto) & (tf >= c.loft_settle_s) & (R > c.loft_handoff_m))
+    if not np.any(active):
+        return ax, ay, az, active
+    if loft_r0 is None:
+        r0 = R
+    else:
+        start = active & np.isnan(loft_r0)
+        loft_r0[start] = R[start]
+        r0 = np.where(np.isnan(loft_r0), R, np.maximum(loft_r0, R))
+    frac = np.minimum(1.0, (R - c.loft_handoff_m) / np.maximum(r0 - c.loft_handoff_m, 1.0))
+    angle = np.deg2rad(c.loft_angle_deg * frac)
+    rh = np.maximum(np.hypot(rx, ry), 1e-6)
+    el = np.arctan2(rz, rh)
+    new_el = el + angle
+    ax2 = mx + R * np.cos(new_el) * (rx / rh)
+    ay2 = my + R * np.cos(new_el) * (ry / rh)
+    az2 = mz + R * np.sin(new_el)
+    return (np.where(active, ax2, ax), np.where(active, ay2, ay),
+            np.where(active, az2, az), active)
 
 
 def endgame_factor(mach: float, cfg: MissileKinematicsConfig) -> float:

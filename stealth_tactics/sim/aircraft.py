@@ -1,21 +1,27 @@
-"""Point-mass aircraft state and kinematics."""
+"""Point-mass aircraft state and kinematics (Spec 8 energy model)."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
 import numpy as np
 
-from .sensor_config import DEFAULT_SENSOR_CONFIG as _SC, F35_KEY, RED_KEY
-
+from .missile_kinematics import G0, atmosphere
+from .sensor_config import (
+    BLUE_ENERGY, DEFAULT_SENSOR_CONFIG as _SC, F35_KEY, RED_ENERGY, RED_KEY,
+    AircraftEnergyConfig,
+)
 
 # Spec 3 (approved change B): flat ground at 0 m MSL (no terrain model yet) and
 # a hard 100 m AGL floor for every aircraft. Missiles that reach the ground are
 # lost (outcome ``ground``, sim/weapons.py).
 GROUND_ALT_M = 0.0
 ALT_FLOOR_AGL_M = 100.0
+RHO_SL = 1.225
+TURN_REVERSAL_BAND_RAD = math.radians(10.0)
 
 
 def ground_alt_m(x: float = 0.0, y: float = 0.0) -> float:
@@ -42,12 +48,17 @@ class Coalition(str, Enum):
 
 @dataclass
 class AircraftTypeParams:
-    """Generic flight / signature params (unclassified placeholders)."""
+    """Generic flight / signature params (unclassified placeholders).
 
-    max_speed_mps: float = 350.0  # ~Mach 1.0 sea level-ish
+    Spec 8: turn / accel come from ``energy`` (n-limited turn, drag, density
+    thrust). ``max_turn_rate_deg_s`` / ``max_speed_mps`` remain as legacy
+    command references used by doctrines; the integrator enforces energy limits.
+    """
+
+    max_speed_mps: float = 350.0  # ~Mach 1.0 sea level-ish (command reference)
     min_speed_mps: float = 80.0
     cruise_speed_mps: float = 250.0
-    max_turn_rate_deg_s: float = 12.0  # sustained turn approx
+    max_turn_rate_deg_s: float = 12.0  # legacy; energy model uses n_max
     max_climb_rate_mps: float = 80.0
     max_alt_m: float = 15000.0
     min_alt_m: float = 100.0
@@ -56,6 +67,7 @@ class AircraftTypeParams:
     # Missile range and Pk are no longer per type (Spec 3a): both sides carry the
     # same missile (SensorConfig.missile_kinematics; Rmax from the envelope table).
     ammo: int = 4
+    energy: AircraftEnergyConfig = field(default_factory=AircraftEnergyConfig)
 
 
 # Unclassified generic LO placeholders labeled F-35 for TacView visualization only.
@@ -63,25 +75,29 @@ class AircraftTypeParams:
 # advantage as the former BlueStealth placeholders (rcs_factor=0.05, etc.).
 F35_PARAMS = AircraftTypeParams(
     max_speed_mps=340.0,
-    min_speed_mps=90.0,
+    min_speed_mps=BLUE_ENERGY.min_speed_mps,
     cruise_speed_mps=260.0,
     max_turn_rate_deg_s=11.0,
     max_climb_rate_mps=90.0,
+    max_alt_m=BLUE_ENERGY.max_alt_m,
     # Sensor numbers live in sensor_config.py (single source of truth).
     rcs_factor=_SC.signature.tables[F35_KEY][0][1],  # nose-on value of LO table
     radar_range_m=_SC.radar.ref_range_m[F35_KEY],
     ammo=4,
+    energy=BLUE_ENERGY,
 )
 
 RED_FIGHTER_PARAMS = AircraftTypeParams(
     max_speed_mps=360.0,
-    min_speed_mps=85.0,
+    min_speed_mps=RED_ENERGY.min_speed_mps,
     cruise_speed_mps=255.0,
     max_turn_rate_deg_s=13.0,
     max_climb_rate_mps=85.0,
+    max_alt_m=RED_ENERGY.max_alt_m,
     rcs_factor=_SC.signature.isotropic_rcs[RED_KEY],
     radar_range_m=_SC.radar.ref_range_m[RED_KEY],
     ammo=4,
+    energy=RED_ENERGY,
 )
 
 
@@ -140,6 +156,9 @@ class Aircraft:
     # Spec 3 D9: left the fight for good (never fires; early end when every live
     # Red jet is departed and no missile is in flight).
     departed: bool = False
+    # Spec 8: sign of the turn in progress (+1 right, -1 left, 0 none). Used for
+    # turn-direction hysteresis when the commanded heading is ~180 deg away.
+    turn_dir: float = 0.0
 
     def __post_init__(self) -> None:
         self.ammo = self.params.ammo
@@ -177,34 +196,88 @@ class Aircraft:
 
 
 def integrate_aircraft(ac: Aircraft, dt: float) -> None:
-    """Advance point-mass kinematics with turn/climb/speed limits."""
+    """Advance point-mass kinematics with the Spec 8 energy model.
+
+    Commands stay heading / speed / altitude. Turn rate is n-limited, drag and
+    density thrust set along-track accel, and climb costs energy via sin(γ).
+    """
     if not ac.state.alive:
         return
 
     p = ac.params
+    e = p.energy
     st = ac.state
+    V = max(float(st.speed_mps), 1.0)
+    rho, a_sound = atmosphere(st.alt)
+    # Hard altitude / Mach ceilings from energy config
+    max_alt = min(p.max_alt_m, e.max_alt_m)
+    v_ceil = e.max_mach * a_sound
 
-    # Heading: turn toward commanded heading at max turn rate
-    max_turn = np.deg2rad(p.max_turn_rate_deg_s) * dt
+    # --- climb rate toward cmd_alt (still rate-limited) ---------------------
+    floor = max(p.min_alt_m, alt_floor_m(st.x, st.y))
+    target_alt = float(np.clip(ac.cmd_alt_m, floor, max_alt))
+    max_climb = p.max_climb_rate_mps
+    climb_rate = float(np.clip(target_alt - st.alt, -max_climb * dt, max_climb * dt) / dt) \
+        if dt > 0 else 0.0
+    # Flight-path angle from the climb/descent; clip so |sin γ| <= 1
+    sin_g = float(np.clip(climb_rate / V, -0.95, 0.95))
+
+    # --- drag / thrust terms -------------------------------------------------
+    q = 0.5 * rho * V * V
+    qS = max(q * e.S_m2, 1e-6)
+    W = e.mass_kg * G0
+    d0 = qS * e.Cd0
+    kind = e.k_induced * W * W / qS          # induced drag per n^2
+    t_avail = e.T_sl_N * (rho / RHO_SL) ** e.thrust_density_exp
+    # Implicit throttle: accelerate when cmd speed > current, else idle
+    target_spd = float(np.clip(ac.cmd_speed_mps, e.min_speed_mps, max(v_ceil, e.min_speed_mps)))
+    thrust = t_avail if target_spd > st.speed_mps + 0.5 else 0.0
+
+    # --- turn: commanded heading change → ω, capped by n_max ----------------
+    n_cap = max(e.n_max, 1.0 + 1e-9)
+    # Soft speed floor (A1.6): a jet may bleed down to min_speed_mps, but once
+    # there it can only pull the load factor its full thrust sustains (no
+    # free max-g turning at the floor). n is reduced so the step just reaches
+    # the floor; if even 1 g cannot be held the jet flies wings-level.
+    if dt > 0:
+        need = (e.min_speed_mps - st.speed_mps) / dt + G0 * sin_g   # required (T-D)/m
+        n2_floor = (t_avail - d0 - e.mass_kg * need) / max(kind, 1e-9)
+        if n2_floor < n_cap * n_cap:
+            n_cap = float(np.sqrt(max(n2_floor, 1.0)))
     dh = _angle_diff(ac.cmd_heading_rad, st.heading_rad)
-    st.heading_rad = _wrap_pi(st.heading_rad + np.clip(dh, -max_turn, max_turn))
+    # Turn-direction hysteresis: with the command within TURN_REVERSAL_BAND of
+    # dead astern, keep turning the way the jet already is instead of letting a
+    # rounding-level change in the command reverse the turn.
+    if (ac.turn_dir != 0.0 and abs(dh) > math.pi - TURN_REVERSAL_BAND_RAD
+            and dh * ac.turn_dir < 0.0):
+        dh += 2.0 * math.pi * ac.turn_dir
+    elif ac.turn_dir == 0.0 and abs(dh) > math.pi - 1e-6:
+        dh = abs(dh)          # exact reversal from straight flight: tie-break right
+    omega_max = G0 * np.sqrt(max(n_cap * n_cap - 1.0, 0.0)) / V
+    omega_cmd = dh / dt if dt > 0 else 0.0
+    omega = float(np.clip(omega_cmd, -omega_max, omega_max))
+    ac.turn_dir = float(np.sign(omega)) if abs(omega_cmd) > omega_max else 0.0
+    st.heading_rad = _wrap_pi(st.heading_rad + omega * dt)
+    n_horiz = V * abs(omega) / G0
+    n = float(np.sqrt(1.0 + n_horiz * n_horiz))
+    if n > 1.0 + 1e-9 and n_cap < max(e.n_max, 1.0 + 1e-9):
+        thrust = t_avail                     # holding the floor in a turn: full thrust
 
-    # Speed
-    max_ds = 30.0 * dt  # accel/decel m/s^2 approx
-    target_spd = float(np.clip(ac.cmd_speed_mps, p.min_speed_mps, p.max_speed_mps))
-    st.speed_mps = float(np.clip(st.speed_mps + np.clip(target_spd - st.speed_mps, -max_ds, max_ds),
-                                  p.min_speed_mps, p.max_speed_mps))
+    # --- along-track accel ---------------------------------------------------
+    drag = d0 + kind * n * n
+    accel = (thrust - drag) / e.mass_kg - G0 * sin_g
+    st.speed_mps = float(st.speed_mps + accel * dt)
+    # Soft floor (see above), hard Mach ceiling
+    st.speed_mps = float(np.clip(st.speed_mps, e.min_speed_mps, v_ceil))
 
-    # Altitude
-    max_climb = p.max_climb_rate_mps * dt
-    floor = max(p.min_alt_m, alt_floor_m(st.x, st.y))   # hard 100 m AGL floor
-    target_alt = float(np.clip(ac.cmd_alt_m, floor, p.max_alt_m))
-    st.alt = float(np.clip(st.alt + np.clip(target_alt - st.alt, -max_climb, max_climb),
-                           floor, p.max_alt_m))
-
+    # --- altitude + position ------------------------------------------------
+    st.alt = float(np.clip(st.alt + climb_rate * dt, floor, max_alt))
     # Position: heading 0 = North (+Y), clockwise toward East (+X)
-    st.x += st.speed_mps * np.sin(st.heading_rad) * dt
-    st.y += st.speed_mps * np.cos(st.heading_rad) * dt
+    # Horizontal speed = V * cos(γ); use remaining after climb component
+    cos_g = float(np.sqrt(max(0.0, 1.0 - sin_g * sin_g)))
+    v_h = st.speed_mps * cos_g
+    st.x += v_h * np.sin(st.heading_rad) * dt
+    st.y += v_h * np.cos(st.heading_rad) * dt
 
 
 def _wrap_pi(a: float) -> float:

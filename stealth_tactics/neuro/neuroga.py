@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from stealth_tactics.fitness import aggregate
+from stealth_tactics.fitness import aggregate, merge_outcome_counts
 
 from .checkpoint import load_npz, save_npz, write_json
 from .evaluate import make_pool, member_job, pmap
@@ -508,6 +508,8 @@ class NeuroGA:
         per = e["per_fight"]
         best_k, worst_k = int(np.argmax(per)), int(np.argmin(per))
         save_genome(out / f"{name}_weights", e["genome"], self.arch)
+        outcomes = merge_outcome_counts(
+            [s.get("missile_outcomes") or {} for s in e.get("bench_summaries") or []])
         doc = {"kind": "network", "arch": self.arch.to_dict(),
                "interface": interface_fingerprint(), "n_networks": self.cfg.n_networks,
                "jet_network": list(self.cfg.jet_network), "lineage": e["genome"].lineage,
@@ -520,7 +522,8 @@ class NeuroGA:
                "fitness_weights": self.cfg.fitness, "n_red": self.cfg.n_red,
                "blue_start": self.cfg.blue_start,
                "best_index": best_k, "worst_index": worst_k,
-               "weights": f"{name}_weights.npz"}
+               "weights": f"{name}_weights.npz",
+               "stats": {"missile_outcomes": outcomes}}
         write_json(out / f"{name}.json", doc)
         if export_acmi:
             export_champion_acmis(out, doc, e["genome"], self.arch)

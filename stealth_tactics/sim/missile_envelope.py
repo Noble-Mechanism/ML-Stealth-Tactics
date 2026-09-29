@@ -31,10 +31,11 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .missile_kinematics import G0, advance_batch, atmosphere, atmosphere_np, derived
+from .missile_kinematics import (G0, advance_batch, atmosphere, atmosphere_np, derived,
+                                  lofted_aim_np)
 from .sensor_config import MissileKinematicsConfig, NM_M
 
-ENGINE_VERSION = "3a.2"   # 3a.2: launch off-nose axis, 180 s cap
+ENGINE_VERSION = "8.1"    # Spec 8: loft bias (decay from loft start) + opening_grace_s
 
 # outcome codes for batch shots
 RUNNING, HIT, DEFEAT_SPEED, DEFEAT_OPENING, MISS_OVERSHOOT, TIMEOUT = range(6)
@@ -78,7 +79,7 @@ def batch_shots(cfg: MissileKinematicsConfig, alt_m, shooter_mach, aspect_deg,
          "psi": np.pi - np.deg2rad(asp),
          "omega": np.where(tc, turn_g * G0 / np.maximum(vt, 1.0), 0.0),
          "vt": vt, "idx": np.arange(n), "mact": np.full(n, np.nan),
-         "tact": np.full(n, np.nan)}
+         "tact": np.full(n, np.nan), "opent": np.zeros(n), "lr0": np.full(n, np.nan)}
     out = np.zeros(n, int)
     tof = np.full(n, np.nan)
     mach_end = np.full(n, np.nan)
@@ -96,7 +97,12 @@ def batch_shots(cfg: MissileKinematicsConfig, alt_m, shooter_mach, aspect_deg,
         tvx, tvy = S["vt"] * np.cos(S["psi"]), S["vt"] * np.sin(S["psi"])
         tx0, ty0, tz0 = S["tx"], S["ty"], S["tz"]
         r0x, r0y, r0z = tx0 - S["x"], ty0 - S["y"], tz0 - S["alt"]
-        advance_batch(S, tx0, ty0, tz0, tvx, tvy, zeros[:m_], h, d)
+        # Spec 8 loft: bias aim upward while outside handoff (batch shots are
+        # always fully supported / never autonomous until active_range).
+        auto = ~np.isnan(S["mact"])   # already gone active on a prior step
+        ax, ay, az, loft_on = lofted_aim_np(
+            S["x"], S["y"], S["alt"], tx0, ty0, tz0, S["tf"], cfg, auto, S["lr0"])
+        advance_batch(S, ax, ay, az, tvx, tvy, zeros[:m_], h, d)
         tx1, ty1 = tx0 + tvx * h, ty0 + tvy * h
         S["tx"], S["ty"] = tx1, ty1
         S["psi"] = np.maximum(0.0, S["psi"] - S["omega"] * h)
@@ -121,8 +127,13 @@ def batch_shots(cfg: MissileKinematicsConfig, alt_m, shooter_mach, aspect_deg,
             rdot = r1x * (tvx - vx) + r1y * (tvy - vy) - r1z * vz
             opening = post & ~slow & (rdot > 0.0)
             near = rng2 < cfg.overshoot_range_m ** 2
+            # miss_overshoot stays immediate; defeat_opening needs grace and
+            # never fires while loft bias is still active (Spec 8 B-d).
             res = np.where(opening & near, MISS_OVERSHOOT, res)
-            res = np.where(opening & ~near, DEFEAT_OPENING, res)
+            open_count = opening & ~near & ~loft_on & (res == RUNNING)
+            S["opent"] = np.where(open_count, S["opent"] + h, 0.0)
+            res = np.where((S["opent"] >= cfg.opening_grace_s) & (res == RUNNING),
+                           DEFEAT_OPENING, res)
         if step == nsteps - 1:
             res = np.where(res == RUNNING, TIMEOUT, res)
         done = res != RUNNING

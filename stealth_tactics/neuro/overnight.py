@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from .checkpoint import write_json
+from stealth_tactics.fitness import merge_outcome_counts
 from .neuroga import NeuroGA, _summ
 
 
@@ -71,6 +72,17 @@ def write_progress(ga: NeuroGA, out: Path, started: float, gens_this_session: in
     timing = [json.loads(l) for l in (ga.run_dir / "timing.jsonl").read_text().splitlines()[-10:]]
     spg = float(np.mean([t["total_s"] for t in timing])) if timing else float("nan")
     last = h[-1]
+    # Spec 8 C: champion-fight missile outcome rollup
+    outcomes = merge_outcome_counts([s.get("missile_outcomes") or {}
+                                     for s in ch.get("bench_summaries") or []])
+
+    def _out_table(title, d):
+        if not d:
+            return [f"### {title}", "", "_none_", ""]
+        labels = sorted(d)
+        rows = ["| label | count |", "|---|---|"] + [f"| {k} | {d[k]} |" for k in labels]
+        return [f"### {title}", ""] + rows + [""]
+
     lines = ["# Progress", "",
              f"- generations done: {ga.gen} (this session {gens_this_session}, "
              f"{(time.time() - started) / 60:.1f} min)",
@@ -85,7 +97,10 @@ def write_progress(ga: NeuroGA, out: Path, started: float, gens_this_session: in
              f"- chart: {'fitness.png' if has_png else 'not written (pip install .[plot])'}",
              "- replay the champion: `python -m stealth_tactics replay-champion "
              f"{out}`", "",
-             "| gen | best | mean | champion benchmark |", "|---|---|---|---|"]
+             "## Champion missile outcomes (benchmark fights)", ""]
+    lines += _out_table("Red as target (Blue shots)", outcomes.get("red_as_target") or {})
+    lines += _out_table("Blue as target (Red shots)", outcomes.get("blue_as_target") or {})
+    lines += ["| gen | best | mean | champion benchmark |", "|---|---|---|---|"]
     lines += [f"| {r['generation']} | {r['best_fitness']:.1f} | {r['mean_fitness']:.1f} | "
               f"{r['champion_bench']:.1f} |" for r in h[-30:]]
     (out / "progress.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -152,7 +152,8 @@ def test_timeout_safety_cap_label():
 def test_head_on_hit_and_outcome_labels_distinct():
     s = fly_shot(40.0, 40_000.0, 0.9, "hot")
     assert s.outcome in ("hit", "miss") and s.fuzed
-    assert 70.0 < s.tof_s < 85.0 and 1.3 < s.mach_end < 1.7
+    # Spec 8 loft: ~69.6 s / ~M2.1 at the end (was ~75 s / ~M1.5 flat)
+    assert 65.0 < s.tof_s < 85.0 and 1.8 < s.mach_end < 2.3
     assert s.a_pole_nm is not None and s.f_pole_nm is not None and s.f_pole_nm < s.a_pole_nm
     assert len(set(OUTCOMES)) == len(OUTCOMES)
     from stealth_tactics.acmi.exporter import ALWAYS_BOOKMARK
@@ -320,7 +321,7 @@ def test_launch_gate_uses_rmax_table():
     a = atmosphere(alt)[1]
     b, r = jets(range_m=45 * NM_M, alt=alt, red_speed=0.9 * a, blue_speed=0.9 * a)
     rmax, rne = wm.envelope_for(b, r)
-    assert 47 * NM_M < rmax < 52 * NM_M and 22 * NM_M < rne < 26 * NM_M
+    assert 80 * NM_M < rmax < 85 * NM_M and 22 * NM_M < rne < 26 * NM_M   # Spec 8 loft: ~82.5
     assert wm.can_shoot(b, r)                    # 45 NM head-on: inside Rmax
     r.state.heading_rad = 0.0                    # now cold: Rmax ~21 NM
     assert wm.rmax_m(b, r) < 23 * NM_M and not wm.can_shoot(b, r)
@@ -354,13 +355,13 @@ def test_envelope_table_monotone_and_rne_below_rmax():
 
 
 # --------------------------------------------------------- calibration -------
-@pytest.mark.parametrize("behavior,goal", [("hot", 50.0), ("turncold", 24.0), ("cold", 20.0),
-                                           ("beam", 28.8)])
+@pytest.mark.parametrize("behavior,goal", [("hot", 82.5), ("turncold", 24.4), ("cold", 21.1),
+                                           ("beam", 34.8)])
 def test_calibration_40k_mach09_sim_path(behavior, goal):
-    """Approved calibration: 40,000 ft, Mach 0.9 vs level Mach 0.9 target:
-    head-on ~50, turn-cold-at-launch ~24, already-cold ~20 NM (+-2 NM);
-    beam checked against the prototype's 28.8 NM."""
-    r = sim_rmax_nm(40_000.0, 0.9, behavior, coarse=5.0, lo=5.0, hi=60.0, tol=0.1)
+    """Spec 8 loft-on calibration: 40,000 ft, Mach 0.9 vs level Mach 0.9.
+    Loft off: hot 49.4, beam 29.6, turncold 24.4, cold 21.1 NM. Loft on: hot ~82.5,
+    beam ~34.8; turncold/cold unchanged (never outside the 25 NM handoff)."""
+    r = sim_rmax_nm(40_000.0, 0.9, behavior, coarse=5.0, lo=5.0, hi=100.0, tol=0.1)
     assert abs(r - goal) <= 2.0, r
 
 
@@ -371,6 +372,7 @@ def test_table_matches_sim_path_at_calibration_point():
         asp, tc = ENV_ARGS[beh]
         tab = (env.rne_m if tc else env.rmax_m)(alt, 0.9, asp, 0.9) / NM_M
         # a shot 0.3 NM inside the table value fuzes, 0.5 NM outside does not
+        # (Spec 8: holds again with 10 deg aspect bins; 20 deg bins over-read beam)
         assert fly_shot(tab - 0.3, 40_000.0, 0.9, beh).fuzed, (beh, tab)
         assert not fly_shot(tab + 0.5, 40_000.0, 0.9, beh).fuzed, (beh, tab)
 
@@ -379,7 +381,7 @@ def test_batch_engine_agrees_with_sim_path():
     alt = 40_000 * FT
     res = batch_shots(KC, alt, 0.9, [0.0, 0.0, 90.0], 0.9,
                       [40 * NM_M, 55 * NM_M, 25 * NM_M], [False, False, False])
-    assert list(res["outcome"] == HIT) == [True, False, True]
+    assert list(res["outcome"] == HIT) == [True, True, True]
     s = fly_shot(40.0, 40_000.0, 0.9, "hot")
     assert abs(res["tof"][0] - s.tof_s) < 0.6 and abs(res["mach_end"][0] - s.mach_end) < 0.02
 
