@@ -1,4 +1,4 @@
-"""Spec 8 / 8b: jet energy calibration (bleed gate, lift limit, transonic hump)."""
+"""Spec 8 / 8b / 8c: jet energy calibration (bleed, lift limit, transonic hump, climb)."""
 
 from __future__ import annotations
 
@@ -132,21 +132,177 @@ def top_speeds(e: AircraftEnergyConfig, alt_ft: float, dm: float = 0.001) -> dic
         i = len(ms) - 1 if ok[-1] else int(np.searchsorted(ms, top))
         while i > 0 and ok[i - 1]:
             i -= 1
-        back = float(ms[i])
+        back = float(ms[i]) if i > 0 else None   # contiguous from M0.9: no gap
     return {"from_subsonic": from_sub, "max_sustained": top, "back_side": back}
 
 
 def level_accel_run(e: AircraftEnergyConfig, alt_ft: float = 40_000.0,
-                    start_mach: float = 0.9, t_s: float = 300.0, dt: float = 0.05) -> dict:
-    """Level, full-thrust acceleration run; returns final / peak Mach."""
+                    start_mach: float = 0.9, t_s: float = 300.0, dt: float = 0.05,
+                    target_mach: Optional[float] = None) -> dict:
+    """Level, full-thrust acceleration run; returns final / peak Mach and the
+    time to reach ``target_mach`` (default max_mach - 0.005; None if never)."""
     ac = _make_jet(e, alt_ft * FT, start_mach)
     ac.cmd_speed_mps = 1.0e4
-    peak = start_mach
-    for _ in range(int(round(t_s / dt))):
+    tgt = (e.max_mach - 0.005) if target_mach is None else target_mach
+    peak, t_hit = start_mach, None
+    for i in range(int(round(t_s / dt))):
         integrate_aircraft(ac, dt)
-        peak = max(peak, _mach(ac))
-    return {"alt_ft": alt_ft, "start_mach": start_mach, "t_s": t_s,
-            "final_mach": _mach(ac), "peak_mach": peak, "final_alt_ft": ac.state.alt / FT}
+        m = _mach(ac)
+        peak = max(peak, m)
+        if t_hit is None and m >= tgt:
+            t_hit = (i + 1) * dt
+    return {"alt_ft": alt_ft, "start_mach": start_mach, "t_s": t_s, "target_mach": tgt,
+            "t_to_target": t_hit, "final_mach": _mach(ac), "peak_mach": peak,
+            "final_alt_ft": ac.state.alt / FT}
+
+
+def accel_time_s(e: AircraftEnergyConfig, alt_ft: float = 40_000.0, m0: float = 0.9,
+                 m1: float = 1.2, t_max: float = 900.0) -> Optional[float]:
+    """Simulated level full-thrust time from m0 to m1 (None if not reached in t_max).
+
+    The implicit throttle holds ~0.5 m/s under the Mach ceiling, so a target at
+    the ceiling counts as reached at max_mach - 0.005."""
+    tgt = min(m1 - 0.001, e.max_mach - 0.005)
+    return level_accel_run(e, alt_ft, m0, t_s=t_max, target_mach=tgt)["t_to_target"]
+
+
+# ------------------------------------------------------ Spec 8c analysis ---
+def specific_excess_power(e: AircraftEnergyConfig, alt_ft: float, mach: float,
+                          n: float = 1.0) -> float:
+    """Ps = (T - D) V / W (m/s) at full thrust and load factor n."""
+    a = atmosphere(alt_ft * FT)[1]
+    return level_excess_n(e, alt_ft, mach, n) * mach * a / (e.mass_kg * G0)
+
+
+def gamma_climb_margin(e: AircraftEnergyConfig, alt_ft: float = 35_000.0, mach: float = 1.0,
+                       gamma_deg: float = 15.0) -> float:
+    """(T - D) / (W sin gamma) in a steady climb at flight-path angle gamma
+    (n = cos gamma). >= 1 means the speed is non-decreasing."""
+    g = math.radians(gamma_deg)
+    return level_excess_n(e, alt_ft, mach, math.cos(g)) / (e.mass_kg * G0 * math.sin(g))
+
+
+def gamma_climb_run(e: AircraftEnergyConfig, alt_ft: float = 35_000.0, mach: float = 1.0,
+                    gamma_deg: float = 15.0, t_s: float = 5.0, dt: float = 0.05) -> dict:
+    """Integrator check: full thrust, climb at a fixed flight-path angle."""
+    ac = _make_jet(e, alt_ft * FT, mach)
+    ac.cmd_speed_mps = 1.0e4
+    sg = math.sin(math.radians(gamma_deg))
+    for _ in range(int(round(t_s / dt))):
+        ac.cmd_alt_m = ac.state.alt + ac.state.speed_mps * sg * dt
+        integrate_aircraft(ac, dt)
+    return {"alt_ft": alt_ft, "mach0": mach, "gamma_deg": gamma_deg, "t_s": t_s,
+            "final_mach": _mach(ac), "final_alt_ft": ac.state.alt / FT,
+            "climb_fpm": ac.state.speed_mps * sg / FT * 60.0}
+
+
+def climb_run(e: AircraftEnergyConfig, schedule: str = "max_rate", start_ft: float = 30_000.0,
+              end_ft: float = 40_000.0, start_mach: float = 1.0, gamma_deg: float = 15.0,
+              t_max: float = 600.0, dt: float = 0.05) -> dict:
+    """Full-thrust climb from start_ft to end_ft. Schedules:
+
+    - ``max_rate``: command end_ft; climb at the type's max climb rate (90 m/s
+      Blue, 112.5 m/s Red), speed floats.
+    - ``gamma``: constant flight-path angle ``gamma_deg``.
+    - ``mach_hold``: climb at the rate that holds the start Mach (climb rate =
+      Ps), capped at the max climb rate.
+    """
+    ac = _make_jet(e, start_ft * FT, start_mach)
+    ac.cmd_speed_mps = 1.0e4
+    top = end_ft * FT
+    t, t_hit, m_min = 0.0, None, start_mach
+    sg = math.sin(math.radians(gamma_deg))
+    a0 = atmosphere(start_ft * FT)[1]
+    while t < t_max:
+        if schedule == "max_rate":
+            ac.cmd_alt_m = top
+        elif schedule == "gamma":
+            ac.cmd_alt_m = min(top, ac.state.alt + ac.state.speed_mps * sg * dt)
+        elif schedule == "mach_hold":
+            ps = specific_excess_power(e, ac.state.alt / FT, _mach(ac))
+            # climb at Ps, plus/minus a correction toward the start Mach
+            err = (_mach(ac) - start_mach) * atmosphere(ac.state.alt)[1]
+            ac.cmd_alt_m = min(top, ac.state.alt + max(0.0, ps + 2.0 * err) * dt)
+        else:
+            raise ValueError(schedule)
+        integrate_aircraft(ac, dt)
+        t += dt
+        m_min = min(m_min, _mach(ac))
+        if ac.state.alt >= top - 1.0:
+            t_hit = t
+            break
+    return {"schedule": schedule, "start_ft": start_ft, "end_ft": end_ft,
+            "start_mach": start_mach, "t_s": t_hit, "end_mach": _mach(ac), "min_mach": m_min,
+            "gamma_deg": gamma_deg if schedule == "gamma" else None}
+
+
+RATIO_CONDITIONS = tuple((h, m) for h in (15_000.0, 25_000.0, 35_000.0, 40_000.0)
+                         for m in (0.7, 0.8, 0.9))
+
+
+def red_blue_ratios(conds=RATIO_CONDITIONS) -> List[dict]:
+    """Red / Blue ratios of 1 g specific excess power, sustained g and max g."""
+    out = []
+    for h, m in conds:
+        out.append({"alt_ft": h, "mach": m,
+                    "ps_blue": specific_excess_power(BLUE_ENERGY, h, m),
+                    "ps_red": specific_excess_power(RED_ENERGY, h, m),
+                    "ps_ratio": specific_excess_power(RED_ENERGY, h, m)
+                    / specific_excess_power(BLUE_ENERGY, h, m),
+                    "sust_g_ratio": sustained_g(RED_ENERGY, h, m) / sustained_g(BLUE_ENERGY, h, m),
+                    "max_g_ratio": lift_limit_g(RED_ENERGY, h, m) / lift_limit_g(BLUE_ENERGY, h, m)})
+    return out
+
+
+def calibration_8c() -> dict:
+    """Spec 8c calibration numbers for Blue and Red."""
+    res = {}
+    for name, e in (("Blue", BLUE_ENERGY), ("Red", RED_ENERGY)):
+        r = {"gamma_margin": gamma_climb_margin(e),
+             "gamma_run": gamma_climb_run(e),
+             "climb_max_rate": climb_run(e, "max_rate"),
+             "climb_gamma15": climb_run(e, "gamma", gamma_deg=15.0),
+             "climb_mach_hold": climb_run(e, "mach_hold"),
+             "climb_plain_m09": climb_run(e, "max_rate", start_mach=0.9),
+             "accel_40k_12": accel_time_s(e, 40_000.0, 0.9, 1.2),
+             "bleed": bleed_run(energy=e)}
+        if e.max_mach > 1.2:
+            r["accel_40k_max"] = accel_time_s(e, 40_000.0, 0.9, e.max_mach)
+        res[name] = r
+    return res
+
+
+def format_calibration_8c(res: dict) -> str:
+    f = lambda v, fmt="{:.1f}": "never" if v is None else fmt.format(v)
+    lines = ["Spec 8c calibration (full thrust; times in s)"]
+    for name, r in res.items():
+        b = r["bleed"]
+        lines += [
+            f"{name}:",
+            f"  35 kft M1.0 gamma 15 deg: (T-D)/(W sin g) = {r['gamma_margin']:.3f}; "
+            f"5 s run M1.000 -> {r['gamma_run']['final_mach']:.3f} "
+            f"({r['gamma_run']['climb_fpm']:.0f} ft/min)",
+            f"  30->40 kft from M1.0, max-rate climb: {f(r['climb_max_rate']['t_s'])} s "
+            f"(end M{r['climb_max_rate']['end_mach']:.3f}, min M{r['climb_max_rate']['min_mach']:.3f})",
+            f"  30->40 kft from M1.0, gamma 15 deg:  {f(r['climb_gamma15']['t_s'])} s "
+            f"(end M{r['climb_gamma15']['end_mach']:.3f})",
+            f"  30->40 kft from M1.0, Mach hold:     {f(r['climb_mach_hold']['t_s'])} s "
+            f"(end M{r['climb_mach_hold']['end_mach']:.3f})",
+            f"  30->40 kft from M0.9, plain full power (max-rate): "
+            f"{f(r['climb_plain_m09']['t_s'])} s (end M{r['climb_plain_m09']['end_mach']:.3f}, "
+            f"min M{r['climb_plain_m09']['min_mach']:.3f})",
+            f"  40 kft level accel M0.9 -> 1.2: {f(r['accel_40k_12'])} s"]
+        if "accel_40k_max" in r:
+            lines.append(f"  40 kft level accel M0.9 -> {BLUE_ENERGY.max_mach if name == 'Blue' else RED_ENERGY.max_mach:.1f}: "
+                         f"{f(r['accel_40k_max'])} s")
+        lines.append(f"  bleed (lift-limited turn, 40 kft, 20 s): M0.9 -> {b['final_mach']:.3f} "
+                     f"(start {b['n_lift0']:.2f} g)")
+    lines += ["", "Red / Blue ratios (1 g Ps, sustained g, max g)",
+              f"  {'alt ft':>7} {'Mach':>5} {'Ps B':>6} {'Ps R':>6} {'Ps R/B':>7} {'sust g R/B':>10} {'max g R/B':>9}"]
+    for q in red_blue_ratios():
+        lines.append(f"  {q['alt_ft']:7.0f} {q['mach']:5.2f} {q['ps_blue']:6.1f} {q['ps_red']:6.1f} "
+                     f"{q['ps_ratio']:7.3f} {q['sust_g_ratio']:10.3f} {q['max_g_ratio']:9.3f}")
+    return "\n".join(lines) + "\n"
 
 
 def dive_climb_run(e: AircraftEnergyConfig, top_ft: float = 40_000.0, low_ft: float = 30_000.0,
@@ -218,25 +374,18 @@ def format_bleed(rep: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def bleeds_ok(rep: dict, min_loss_mach: float = 0.08) -> bool:
+    """Spec 8c bleed check: the lift-limited turn still clearly loses speed
+    (at least ``min_loss_mach`` in the run). Replaces the Spec 8 0.60-0.80 gate
+    as the pass criterion; more thrust may leave the end Mach above 0.8."""
+    return rep["final_mach"] <= rep["start_mach"] - min_loss_mach
+
+
 def gate_ok(rep: dict, lo: float = 0.60, hi: float = 0.80) -> bool:
     """A-d accept: final Mach in [lo, hi] (~0.7)."""
     return lo <= rep["final_mach"] <= hi
 
 
 def calibration_report() -> str:
-    """Spec 8b report: performance table plus the 40 kft calibration runs."""
-    out = [format_performance(performance_table())]
-    for name, e in (("Blue", BLUE_ENERGY), ("Red", RED_ENERGY)):
-        b = bleed_run(energy=e)
-        la = level_accel_run(e)
-        hold = level_accel_run(e, start_mach=1.2)
-        dc = dive_climb_run(e)
-        out += [f"{name}: lift-limit g at 40 kft / M0.9 = {lift_limit_g(e, 40_000.0, 0.9):.2f}",
-                f"  bleed gate (lift-limited turn, 20 s): M0.9 -> {b['final_mach']:.3f}",
-                f"  level accel 40 kft from M0.9 (300 s): final {la['final_mach']:.3f}",
-                f"  hold from M1.2 at 40 kft (300 s): final {hold['final_mach']:.3f}",
-                f"  dive-climb: M{dc['mach_at_trigger']:.3f} at {dc['alt_supersonic_ft']:.0f} ft "
-                f"after {dc['t_supersonic']:.0f} s; arrives 40 kft at t={dc['t_arrive']:.0f} s "
-                f"M{dc['mach_arrive']:.3f}; final M{dc['final_mach']:.3f} at "
-                f"{dc['final_alt_ft']:.0f} ft (t={dc['t_s']:.0f} s)", ""]
-    return "\n".join(out) + "\n"
+    """Spec 8b/8c report: performance table plus the 8c calibration runs."""
+    return format_performance(performance_table()) + "\n" + format_calibration_8c(calibration_8c())

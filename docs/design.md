@@ -22,6 +22,11 @@ ACMI 2.2 for visual playback.
   high must descend or unload; Cd0 has a transonic rise (x2.2 at M1.05) and thrust
   lapses as sigma^1.2 with a ram gain, so a jet at 40 kft cannot accelerate level
   through the hump but can hold M1.2 once supersonic (see `specs/08b-jet-lift-drag.md`).
+  Spec 8c (thrust retune): more thrust (Blue T_sl 200 kN, lapse sigma^0.8 below / ^1.0
+  above 11 km), stubby-wing induced drag (k 0.16), a narrow Cd0 peak (x3.08 at M1.10).
+  Blue holds M1.0 in a 15 deg climb at 35 kft, climbs 30->40 kft in ~34-39 s, and
+  accelerates level at 40 kft from M0.9 to 1.2 slowly (~131 s). Red is ~25% better
+  (Ps, sustained g; max g +15%). See `specs/08c-thrust-retune.md`.
 - **Ground (Spec 3):** flat ground at 0 m (`aircraft.GROUND_ALT_M`); hard
   **100 m AGL floor** for every aircraft (`ALT_FLOOR_AGL_M`, enforced in
   `integrate_aircraft`). A missile that reaches the ground ends with outcome `ground`.

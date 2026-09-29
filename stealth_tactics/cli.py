@@ -386,24 +386,27 @@ def cmd_missile_sweep(args: argparse.Namespace) -> int:
 
 def cmd_aircraft_sweep(args: argparse.Namespace) -> int:
     """Spec 8: jet energy bleed calibration (A-d gate)."""
-    from stealth_tactics.analysis.aircraft_sweep import (bleed_run, calibration_report,
-                                                          format_bleed, gate_ok)
+    from stealth_tactics.analysis.aircraft_sweep import (bleed_run, bleeds_ok,
+                                                          calibration_report, format_bleed,
+                                                          gate_ok)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     reps = []
-    lines = ["Spec 8/8b jet energy bleed calibration (A-d: Mach 0.9 -> ~0.7 in ~20 s "
-             "at 40 kft, lift-limited g).", ""]
+    lines = ["Spec 8/8b/8c jet energy bleed check (lift-limited turn at 40 kft from "
+             "Mach 0.9 for 20 s must clearly lose speed).", ""]
     for n in (args.n_max or [None]):
         rep = bleed_run(n_max=n, alt_ft=args.alt_ft, start_mach=args.mach, t_s=args.time)
         reps.append(rep)
         block = format_bleed(rep)
         lines.append(block)
-        ok = gate_ok(rep)
-        lines.append(f"  A-d gate (0.60-0.80): {'PASS' if ok else 'FAIL'}")
+        ok = bleeds_ok(rep)
+        old = gate_ok(rep)
+        lines.append(f"  bleed check (loses >= 0.08 Mach): {'PASS' if ok else 'FAIL'}; "
+                     f"Spec 8 band 0.60-0.80 (info only): {'in' if old else 'out'}")
         lines.append("")
         print(block)
-        print(f"  A-d gate: {'PASS' if ok else 'FAIL'}")
+        print(f"  bleed check: {'PASS' if ok else 'FAIL'} (Spec 8 band: {'in' if old else 'out'})")
     nl = chr(10)
     (out_dir / "aircraft_bleed.txt").write_text(nl.join(lines) + nl, encoding="utf-8")
     perf = calibration_report()
@@ -683,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ms.set_defaults(func=cmd_missile_sweep)
 
     p_as = sub.add_parser("aircraft-sweep",
-                          help="Spec 8/8b: jet bleed gate + performance table")
+                          help="Spec 8/8b/8c: jet bleed check, performance table, climb/accel calibration")
     p_as.add_argument("--n-max", type=float, nargs="+", default=None,
                       help="structural load-factor caps to sweep (default: the type's "
                            "own, lift-limited)")

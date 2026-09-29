@@ -1,6 +1,10 @@
 # Spec 8b: Jet lift limit and transonic drag rise (implemented)
 
 Status: **implemented** (approved by Rusty 2026-09-29; built and pushed 2026-09-29).
+
+> **Superseded numbers:** Spec 8c (thrust retune, 2026-09-29) replaced the thrust,
+> induced-drag and drag-rise placeholders below. The lift limit is kept (Red CLmax
+> is now 1.5). See `08c-thrust-retune.md` for the current numbers.
 This changes the jet model only. The missile, loft and Rmax table are unchanged
 (same envelope cache key, `ENGINE_VERSION` 8.1, so no rebuild). All numbers are
 unclassified placeholders in `AircraftEnergyConfig` (`sim/sensor_config.py`),

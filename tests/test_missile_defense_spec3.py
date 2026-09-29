@@ -571,7 +571,11 @@ OLD_F35_TABLE = ((0.0, 0.05), (30.0, 0.10), (60.0, 0.45), (90.0, 0.90), (135.0, 
 # Re-baselined again for Spec 8b (jet lift limit, transonic Cd0 rise, new
 # thrust lapse / ram gain): jet trajectories change; the missile is unchanged.
 # Spec 8 values were {0: 1892b7cbd55ba473, 1: 894b020fcfc9a5a3, 2: 8495e9d6202d6deb}.
-PRE_SPEC3 = {0: "6b4cb09c3f55ddbf", 1: "dd4c697b4e8f3036", 2: "757071008f10ec92"}
+# Re-baselined for Spec 8c (thrust retune: T_sl, two-segment lapse, k_induced,
+# drag-rise shape, Red CLmax 1.5 and climb cap 112.5 m/s): jet paths change; the
+# missile is unchanged. Spec 8b values were
+# {0: 6b4cb09c3f55ddbf, 1: dd4c697b4e8f3036, 2: 757071008f10ec92}.
+PRE_SPEC3 = {0: "17c0b3f87d650fae", 1: "3f44f44d59a68361", 2: "9a4409c641ca401a"}
 
 
 def _fingerprint(seed):

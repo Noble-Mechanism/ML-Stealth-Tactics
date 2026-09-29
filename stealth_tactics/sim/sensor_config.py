@@ -239,37 +239,43 @@ class MissileCoastConfig:
 # ------------------------------------------------ aircraft energy (Spec 8) ---
 @dataclass(frozen=True)
 class AircraftEnergyConfig:
-    """Spec 8 / 8b point-mass jet energy model. Unclassified placeholders, NOT
-    real F-35 / adversary performance. Separate Blue / Red sets (A-b); single
-    n_max (A-c).
+    """Spec 8 / 8b / 8c point-mass jet energy model. Unclassified placeholders,
+    NOT real F-35 / adversary performance. Separate Blue / Red sets (A-b);
+    single n_max (A-c).
 
     Spec 8b: available load factor = min(n_max, q S CLmax / W); Cd0 has a
-    transonic rise (``cd0_factor``); thrust = T_sl (rho/rho_sl)^thrust_density_exp
-    x (1 + thrust_ram_gain x max(0, M - thrust_ram_ref_mach)).
+    transonic rise (``cd0_factor``).
+    Spec 8c (thrust retune): thrust = T_sl x sigma^thrust_density_exp below the
+    tropopause, x (rho / rho_tropo)^thrust_density_exp_strat above it, x
+    (1 + thrust_ram_gain x max(0, M - thrust_ram_ref_mach)). The Cd0 rise is
+    x^cd0_rise_power (slow start, steep near the peak).
     """
     mass_kg: float = 18000.0
     S_m2: float = 40.0
     Cd0: float = 0.025
-    k_induced: float = 0.08
+    k_induced: float = 0.16
     n_max: float = 7.0
-    T_sl_N: float = 110000.0
-    thrust_density_exp: float = 1.2
+    T_sl_N: float = 200000.0
+    thrust_density_exp: float = 0.8
+    # Lapse exponent above the tropopause (None = same as below)
+    thrust_density_exp_strat: Optional[float] = 1.0
+    thrust_tropo_rho: float = 0.36391780335853485    # ISA density at 11 km
     max_mach: float = 1.2
     max_alt_m: float = 15000.0
     min_speed_mps: float = 90.0
     # Spec 8b lift limit
     CLmax: float = 1.3
-    # Spec 8b transonic drag rise: Cd0 x 1 up to cd0_rise_mach, rising
-    # (1 - (1 - x)^cd0_rise_exp) to cd0_peak_factor at cd0_peak_mach, then
-    # declining cd0_decline_per_mach (factor per Mach) to cd0_supersonic_floor.
+    # Transonic drag rise: Cd0 x 1 up to cd0_rise_mach, rising as x^cd0_rise_power
+    # (x = fraction of the way to the peak) to cd0_peak_factor at cd0_peak_mach,
+    # then declining cd0_decline_per_mach (factor per Mach) to cd0_supersonic_floor.
     cd0_rise_mach: float = 0.85
-    cd0_peak_mach: float = 1.05
-    cd0_peak_factor: float = 2.2
-    cd0_rise_exp: float = 2.0
-    cd0_decline_per_mach: float = 2.5
+    cd0_peak_mach: float = 1.10
+    cd0_peak_factor: float = 3.08
+    cd0_rise_power: float = 3.0
+    cd0_decline_per_mach: float = 4.0
     cd0_supersonic_floor: float = 1.5
-    # Spec 8b thrust vs Mach (ram recovery above the reference Mach)
-    thrust_ram_gain: float = 1.5
+    # Thrust vs Mach (ram recovery above the reference Mach); 0 in Spec 8c
+    thrust_ram_gain: float = 0.0
     thrust_ram_ref_mach: float = 0.9
 
     def cd0_factor(self, mach: float) -> float:
@@ -278,24 +284,38 @@ class AircraftEnergyConfig:
             return 1.0
         if mach <= mp:
             x = (mach - m0) / (mp - m0)
-            return 1.0 + (self.cd0_peak_factor - 1.0) * (1.0 - (1.0 - x) ** self.cd0_rise_exp)
+            return 1.0 + (self.cd0_peak_factor - 1.0) * x ** self.cd0_rise_power
         return max(self.cd0_supersonic_floor,
                    self.cd0_peak_factor - self.cd0_decline_per_mach * (mach - mp))
 
+    def density_lapse(self, rho: float) -> float:
+        rt = self.thrust_tropo_rho
+        a2 = self.thrust_density_exp_strat
+        if a2 is None or rho >= rt:
+            return (rho / 1.225) ** self.thrust_density_exp
+        return (rt / 1.225) ** self.thrust_density_exp * (rho / rt) ** a2
+
     def thrust_n(self, rho: float, mach: float) -> float:
         ram = 1.0 + self.thrust_ram_gain * max(0.0, mach - self.thrust_ram_ref_mach)
-        return self.T_sl_N * (rho / 1.225) ** self.thrust_density_exp * ram
+        return self.T_sl_N * self.density_lapse(rho) * ram
 
 
+# Spec 8c calibration (see docs/specs/08c-thrust-retune.md). Red is ~25% better:
+# ~25% more specific excess power and sustained g (lower k, more thrust), a
+# 15% higher lift limit (CLmax 1.5), n_max 8, Mach ceiling 1.4.
 BLUE_ENERGY = AircraftEnergyConfig(
-    mass_kg=18000.0, S_m2=40.0, Cd0=0.025, k_induced=0.08, n_max=7.0,
-    T_sl_N=146000.0, thrust_density_exp=1.2, max_mach=1.2, max_alt_m=15000.0,
-    min_speed_mps=90.0, CLmax=1.3,
+    mass_kg=18000.0, S_m2=40.0, Cd0=0.025, k_induced=0.16, n_max=7.0,
+    T_sl_N=200000.0, thrust_density_exp=0.8, thrust_density_exp_strat=1.0,
+    max_mach=1.2, max_alt_m=15000.0, min_speed_mps=90.0, CLmax=1.3,
+    cd0_peak_mach=1.10, cd0_peak_factor=3.08, cd0_rise_power=3.0,
+    cd0_decline_per_mach=4.0, thrust_ram_gain=0.0,
 )
 RED_ENERGY = AircraftEnergyConfig(
-    mass_kg=18000.0, S_m2=40.0, Cd0=0.028, k_induced=0.08, n_max=8.0,
-    T_sl_N=163000.0, thrust_density_exp=1.2, max_mach=1.4, max_alt_m=15000.0,
-    min_speed_mps=85.0, CLmax=1.4,
+    mass_kg=18000.0, S_m2=40.0, Cd0=0.028, k_induced=0.12, n_max=8.0,
+    T_sl_N=232000.0, thrust_density_exp=0.8, thrust_density_exp_strat=1.0,
+    max_mach=1.4, max_alt_m=15000.0, min_speed_mps=85.0, CLmax=1.5,
+    cd0_peak_mach=1.10, cd0_peak_factor=3.20, cd0_rise_power=3.0,
+    cd0_decline_per_mach=4.0, thrust_ram_gain=0.0,
 )
 
 

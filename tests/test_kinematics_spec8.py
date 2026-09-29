@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from stealth_tactics.analysis.aircraft_sweep import bleed_run, gate_ok
+from stealth_tactics.analysis.aircraft_sweep import bleed_run, bleeds_ok
 from stealth_tactics.analysis.missile_sweep import sim_rmax_nm, fly_shot
 from stealth_tactics.fitness import (DEFAULT_WEIGHTS, fight_terms, load_weights,
                                      merge_outcome_counts, missile_outcome_counts)
@@ -33,11 +33,13 @@ def cfg_kin(**kw):
 
 # --------------------------------------------------------------- A: energy ---
 def test_jet_bleed_gate_ad():
-    """A-d: hard turn at 40 kft from Mach 0.9 bleeds to ~Mach 0.7 within ~20 s.
-    Spec 8b: the turn uses the lift-limited load factor (~3.1 g at the start)."""
+    """A-d: hard turn at 40 kft from Mach 0.9 for 20 s bleeds speed.
+    Spec 8b: the turn uses the lift-limited load factor (~3.1 g at the start).
+    Spec 8c: with more thrust the 0.60-0.80 band is info only; the check is
+    that the turn still clearly loses speed (>= 0.08 Mach)."""
     rep = bleed_run(alt_ft=40_000.0, start_mach=0.9, t_s=20.0)
-    assert gate_ok(rep), rep["final_mach"]
-    assert 0.60 <= rep["final_mach"] <= 0.80
+    assert bleeds_ok(rep), rep["final_mach"]
+    assert rep["final_mach"] < 0.82
 
 
 def test_blue_red_energy_params_separate():

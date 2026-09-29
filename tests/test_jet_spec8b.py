@@ -1,4 +1,8 @@
-"""Spec 8b: jet lift limit and transonic drag rise (jet model only)."""
+"""Spec 8b: jet lift limit and transonic drag rise (jet model only).
+
+Spec 8c retuned thrust and the drag-rise shape; the hump test now checks that
+level acceleration at 40 kft is slow rather than blocked (see test_jet_spec8c.py).
+"""
 
 from __future__ import annotations
 
@@ -6,9 +10,9 @@ import math
 
 import pytest
 
-from stealth_tactics.analysis.aircraft_sweep import (bleed_run, dive_climb_run, gate_ok,
-                                                     level_accel_run, lift_limit_g,
-                                                     top_speeds)
+from stealth_tactics.analysis.aircraft_sweep import (accel_time_s, bleed_run, bleeds_ok,
+                                                     dive_climb_run, level_accel_run,
+                                                     lift_limit_g, top_speeds)
 from stealth_tactics.sim.aircraft import Aircraft, AircraftState, integrate_aircraft, F35_PARAMS
 from stealth_tactics.sim.missile_kinematics import atmosphere
 from stealth_tactics.sim.sensor_config import BLUE_ENERGY, RED_ENERGY
@@ -18,15 +22,17 @@ TYPES = [("blue", BLUE_ENERGY), ("red", RED_ENERGY)]
 
 
 def test_clmax_placeholders_per_type():
-    assert BLUE_ENERGY.CLmax == 1.3 and RED_ENERGY.CLmax == 1.4
+    # Spec 8c: Red bumped 1.4 -> 1.5 (max g at altitude ~15% above Blue)
+    assert BLUE_ENERGY.CLmax == 1.3 and RED_ENERGY.CLmax == 1.5
 
 
 def test_cd0_transonic_shape():
     for _, e in TYPES:
-        assert e.cd0_factor(0.5) == 1.0 and e.cd0_factor(0.85) == 1.0
-        assert e.cd0_factor(1.05) == pytest.approx(2.2)
-        assert 1.0 < e.cd0_factor(0.95) < 2.2
-        assert e.cd0_factor(1.2) < e.cd0_factor(1.05)        # declines after the peak
+        mp = e.cd0_peak_mach
+        assert e.cd0_factor(0.5) == 1.0 and e.cd0_factor(e.cd0_rise_mach) == 1.0
+        assert e.cd0_factor(mp) == pytest.approx(e.cd0_peak_factor)
+        assert 1.0 < e.cd0_factor(0.95) < e.cd0_factor(1.0) < e.cd0_peak_factor
+        assert e.cd0_factor(mp + 0.1) < e.cd0_factor(mp)      # declines after the peak
         assert e.cd0_factor(1.4) >= e.cd0_supersonic_floor
 
 
@@ -62,18 +68,25 @@ def test_slow_jet_up_high_must_sink():
 
 
 @pytest.mark.parametrize("name,e", TYPES)
-def test_transonic_hump_blocks_level_accel_at_40kft(name, e):
-    rep = level_accel_run(e, alt_ft=40_000.0, start_mach=0.9, t_s=300.0)
-    assert rep["peak_mach"] < 1.0, rep
-    assert rep["final_alt_ft"] == pytest.approx(40_000.0)
-    assert top_speeds(e, 40_000.0)["from_subsonic"] < 1.0
+def test_transonic_hump_slows_level_accel_at_40kft(name, e):
+    """Spec 8c: the hump no longer blocks level acceleration at 40 kft, but the
+    level excess thrust bottoms out past Mach 1.0 at a small fraction of its
+    Mach 0.9 value (the slow part of the run)."""
+    from stealth_tactics.analysis.aircraft_sweep import level_excess_n
+    t = accel_time_s(e, 40_000.0, 0.9, 1.2)
+    assert t is not None and t > 60.0, t
+    ms = [0.9 + 0.005 * i for i in range(61)]
+    ex = [level_excess_n(e, 40_000.0, m) for m in ms]
+    m_min = ms[ex.index(min(ex))]
+    assert m_min > 1.0 and 0.0 < min(ex) < 0.25 * ex[0]
 
 
 @pytest.mark.parametrize("name,e", TYPES)
 def test_supersonic_at_40kft_sustains_mach_1_2(name, e):
     rep = level_accel_run(e, alt_ft=40_000.0, start_mach=1.2, t_s=300.0)
     assert rep["final_mach"] >= 1.19, rep
-    assert top_speeds(e, 40_000.0)["back_side"] < 1.2
+    # Spec 8c: no hump gap at 40 kft any more (level accel is slow, not blocked)
+    assert top_speeds(e, 40_000.0)["max_sustained"] >= 1.2
 
 
 @pytest.mark.parametrize("name,e", TYPES)
@@ -86,6 +99,8 @@ def test_dive_and_climb_reaches_supersonic_at_40kft(name, e):
 
 @pytest.mark.parametrize("name,e", TYPES)
 def test_bleed_gate_lift_limited(name, e):
+    """Spec 8c: with more thrust the old 0.60-0.80 band is not forced; the
+    lift-limited turn at 40 kft must still clearly lose speed."""
     rep = bleed_run(energy=e, alt_ft=40_000.0, start_mach=0.9, t_s=20.0)
     assert rep["n_max"] == e.n_max          # no override: lift limit does the capping
-    assert gate_ok(rep), rep["final_mach"]
+    assert bleeds_ok(rep), rep["final_mach"]
