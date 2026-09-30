@@ -4,6 +4,10 @@ Status: **implemented** (approved by Rusty 2026-09-29; built and pushed
 2026-09-29). Follows Spec 8c. The missile fly-out, loft, defeat rules and the
 Rmax table (and its cache key, `ENGINE_VERSION` 8.1) are unchanged.
 
+> Spec 8e (`08e-rolled-pull.md`) extends this model: rolled / inverted pulls,
+> a 60 deg dive limit and roll-rate / g-onset limits. The 8d model is still
+> available as `spec8d_energy(e)`.
+
 ## Why
 
 Rusty's first overnight champion on 5dea297 flew its F-35s at about M0.53 at

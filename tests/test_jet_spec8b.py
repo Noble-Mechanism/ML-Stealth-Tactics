@@ -6,6 +6,7 @@ level acceleration at 40 kft is slow rather than blocked (see test_jet_spec8c.py
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
@@ -15,7 +16,7 @@ from stealth_tactics.analysis.aircraft_sweep import (accel_time_s, bleed_run, bl
                                                      lift_limit_g, top_speeds)
 from stealth_tactics.sim.aircraft import Aircraft, AircraftState, integrate_aircraft, F35_PARAMS
 from stealth_tactics.sim.missile_kinematics import atmosphere
-from stealth_tactics.sim.sensor_config import BLUE_ENERGY, RED_ENERGY
+from stealth_tactics.sim.sensor_config import BLUE_ENERGY, RED_ENERGY, spec8d_energy
 
 FT = 0.3048
 TYPES = [("blue", BLUE_ENERGY), ("red", RED_ENERGY)]
@@ -44,7 +45,9 @@ def test_lift_limit_caps_g_at_40kft_mach09():
     alt = 40_000 * FT
     V0 = 0.9 * atmosphere(alt)[1]
     ac = Aircraft.make_blue("B1", "F-35-1", AircraftState(0.0, 0.0, alt, 0.0, V0))
-    ac.params = F35_PARAMS
+    # Spec 8e: instantaneous lift vector here (the default g-onset / roll-rate
+    # limits would need a few steps to load up to the cap)
+    ac.params = dataclasses.replace(F35_PARAMS, energy=spec8d_energy(F35_PARAMS.energy))
     ac.cmd_speed_mps, ac.cmd_alt_m, ac.cmd_heading_rad = V0, alt, math.pi / 2
     h0 = ac.state.heading_rad
     integrate_aircraft(ac, 0.05)

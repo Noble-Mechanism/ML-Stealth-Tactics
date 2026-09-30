@@ -1,6 +1,11 @@
 """Spec 8d: flight-path angle dynamics (no free vertical jinking) and the
 look-up launch fix (envelope uses the shooter's altitude when the target is
-higher). See docs/specs/08d-flight-path-and-launch.md."""
+higher). See docs/specs/08d-flight-path-and-launch.md.
+
+Spec 8e (rolled pull, lift-vector rate limits) changed the default model; the
+tests that check 8d-specific allocation details (wings-level 0 g push floor,
+vertical-first split, instantaneous load factor) fly the airframe with
+spec8d_energy(). The 8e equivalents are in tests/test_jet_spec8e.py."""
 
 from __future__ import annotations
 
@@ -13,18 +18,22 @@ from stealth_tactics.sim.aircraft import (Aircraft, AircraftState, F35_PARAMS,
                                           RED_FIGHTER_PARAMS, integrate_aircraft)
 from stealth_tactics.sim.missile_envelope import MissileEnvelope
 from stealth_tactics.sim.missile_kinematics import atmosphere
-from stealth_tactics.sim.sensor_config import BLUE_ENERGY, RED_ENERGY
+import dataclasses
+
+from stealth_tactics.sim.sensor_config import BLUE_ENERGY, RED_ENERGY, spec8d_energy
 
 G0 = 9.80665
 FT = 0.3048
 
 
-def _jet(alt_ft, mach, red=False, gamma_deg=0.0):
+def _jet(alt_ft, mach, red=False, gamma_deg=0.0, model8d=False):
     alt = alt_ft * FT
     V = mach * atmosphere(alt)[1]
     mk = Aircraft.make_red if red else Aircraft.make_blue
     ac = mk("J", "J", AircraftState(0.0, 0.0, alt, 0.0, V))
     ac.params = RED_FIGHTER_PARAMS if red else F35_PARAMS
+    if model8d:
+        ac.params = dataclasses.replace(ac.params, energy=spec8d_energy(ac.params.energy))
     ac.cmd_heading_rad, ac.cmd_speed_mps, ac.cmd_alt_m = 0.0, V, alt
     ac.gamma_rad = math.radians(gamma_deg)
     return ac
@@ -51,20 +60,20 @@ def _step(ac, dt):
 @pytest.mark.parametrize("alt_ft,mach", [(15_000, 0.9), (25_000, 0.8), (35_000, 1.0), (42_000, 0.6)])
 def test_gamma_rate_limited_by_load_factor(alt_ft, mach):
     """Pull-up rate <= g (n_cap - cos gamma) / V; push-over floor 0 g."""
-    ac = _jet(alt_ft, mach)
+    ac = _jet(alt_ft, mach, model8d=True)
     ac.cmd_alt_m = ac.state.alt + 5000.0
     for _ in range(40):
         n_v, _, nc = _step(ac, 0.05)
         assert n_v <= nc + 1e-6
     # first step from level cannot reach the demanded angle instantly
-    ac2 = _jet(alt_ft, mach)
+    ac2 = _jet(alt_ft, mach, model8d=True)
     ac2.cmd_alt_m = ac2.state.alt + 5000.0
     V = ac2.state.speed_mps
     nc = _n_cap(ac2)
     integrate_aircraft(ac2, 0.5)
     assert ac2.gamma_rad <= G0 * (nc - 1.0) / V * 0.5 + 1e-9
     # push-over: gamma decreases no faster than 0 g allows
-    ac3 = _jet(alt_ft, mach, gamma_deg=10.0)
+    ac3 = _jet(alt_ft, mach, gamma_deg=10.0, model8d=True)
     ac3.cmd_alt_m = ac3.state.alt - 5000.0
     for _ in range(40):
         n_v, _, _ = _step(ac3, 0.05)
@@ -77,7 +86,7 @@ def test_no_free_jinking_alternating_climb_sink(alt_ft, mach):
     Before 8d the jet reversed +-90 m/s vertical speed every step (~37 g of
     vertical acceleration at ~1 g available). Now the vertical load factor
     stays inside [0, n_cap] and altitude acceleration stays bounded."""
-    ac = _jet(alt_ft, mach)
+    ac = _jet(alt_ft, mach, model8d=True)
     dt = 0.5
     vz, n_caps, alts = [], [], []
     alt_start = ac.state.alt
@@ -104,7 +113,7 @@ def test_no_free_jinking_alternating_climb_sink(alt_ft, mach):
 def test_shared_g_budget_with_turn():
     """Total load factor sqrt(n_v^2 + n_h^2) <= n_cap; vertical demand first,
     so a pull-up turns slower than a level lift-limited turn."""
-    ac = _jet(25_000, 0.8)
+    ac = _jet(25_000, 0.8, model8d=True)
     ac.cmd_alt_m = ac.state.alt + 3000.0
     ac.cmd_heading_rad = math.pi / 2
     first = None
@@ -113,7 +122,7 @@ def test_shared_g_budget_with_turn():
         assert math.hypot(n_v, n_h) <= nc + 1e-6
         if first is None:
             first = (n_v, n_h, nc)
-    lvl = _jet(25_000, 0.8)
+    lvl = _jet(25_000, 0.8, model8d=True)
     lvl.cmd_heading_rad = math.pi / 2
     _, n_h_lvl, nc_l = _step(lvl, 0.05)
     assert n_h_lvl == pytest.approx(math.sqrt(nc_l ** 2 - 1.0), rel=1e-6)
@@ -121,7 +130,7 @@ def test_shared_g_budget_with_turn():
 
 
 def test_induced_drag_uses_total_load_factor():
-    ac = _jet(25_000, 0.8)
+    ac = _jet(25_000, 0.8, model8d=True)
     ac.cmd_speed_mps = 1.0e4
     ac.cmd_alt_m = ac.state.alt + 3000.0
     e = ac.params.energy
@@ -138,7 +147,7 @@ def test_induced_drag_uses_total_load_factor():
                    - G0 * math.sin(ac.gamma_rad)) * dt
     assert ac.state.speed_mps == pytest.approx(expect, rel=1e-9)
     # and more speed lost than the same step at 1 g level
-    lvl = _jet(25_000, 0.8)
+    lvl = _jet(25_000, 0.8, model8d=True)
     lvl.cmd_speed_mps = 1.0e4
     integrate_aircraft(lvl, dt)
     assert ac.state.speed_mps < lvl.state.speed_mps - 0.1

@@ -10,7 +10,7 @@ ACMI 2.2 for visual playback.
 ## Simulation model
 
 - **Point-mass** kinematics in local ENU (East, North, Up) meters.
-- State per aircraft: `x, y, alt, heading, speed, alive` (+ flight-path angle `gamma_rad`, Spec 8d).
+- State per aircraft: `x, y, alt, heading, speed, alive` (+ flight-path angle `gamma_rad`, Spec 8d; lift-vector bank `bank_rad` and load factor `load_factor`, Spec 8e).
 - Heading convention: **0 = North**, increasing **clockwise** (aviation/TacView yaw).
 - Limits (Spec 8): n-limited turn (energy model), climb rate (m/s), Mach/altitude
   ceilings, min speed. Drag + density thrust replace the old fixed turn rate /
@@ -33,6 +33,15 @@ ACMI 2.2 for visual playback.
   and induced drag uses the total load factor. `cmd_alt` drives an altitude
   hold that levels off without overshoot. No more free climb/dive jinking; a jet
   below 1 g lift drops its nose. See `specs/08d-flight-path-and-launch.md`.
+  Spec 8e (rolled pull): the lift vector (magnitude 0 <= n <= n_cap, positive g
+  only) can sit at any bank incl. inverted, so a big descent demand is flown as
+  an inverted / rolled descending pull (nose down at up to (n_cap + cos gamma)
+  g / V; an "out" at 40 kft reverses 180 deg in ~16 s vs ~35 s level). A
+  wings-level push is still floored at 0 g. Bank (`Aircraft.bank_rad`) and load
+  factor (`Aircraft.load_factor`) are rate limited (120 deg/s roll, 6 g/s onset)
+  so the lift vector cannot be flipped every step; descents limited to a 60 deg
+  dive with an altitude-hold pull-out that respects the floor. ACMI carries
+  roll / pitch. `spec8d_energy()` restores the 8d model. See `specs/08e-rolled-pull.md`.
 - **Ground (Spec 3):** flat ground at 0 m (`aircraft.GROUND_ALT_M`); hard
   **100 m AGL floor** for every aircraft (`ALT_FLOOR_AGL_M`, enforced in
   `integrate_aircraft`). A missile that reaches the ground ends with outcome `ground`.

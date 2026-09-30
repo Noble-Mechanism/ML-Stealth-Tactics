@@ -583,7 +583,14 @@ OLD_F35_TABLE = ((0.0, 0.05), (30.0, 0.10), (60.0, 0.45), (90.0, 0.90), (135.0, 
 # for look-up shots): jet paths and Rmax gates change; the missile fly-out is
 # unchanged. Spec 8c values were
 # {0: 17c0b3f87d650fae, 1: 3f44f44d59a68361, 2: 9a4409c641ca401a}.
-PRE_SPEC3 = {0: "4dcf69e1363d65db", 1: "24b05e6373e53513", 2: "785ed021d347d0d8"}
+# Re-baselined for Spec 8e (rolled pull, 60 deg max dive, roll-rate / g-onset
+# limits on the lift vector): large descents are flown as inverted pulls and
+# every maneuver onset is rate limited, so jet paths change; the missile is
+# unchanged. Spec 8d values (still reproduced exactly with spec8d_energy(),
+# see PRE_SPEC3_8D_MODEL / tests/test_jet_spec8e.py) were
+# {0: 4dcf69e1363d65db, 1: 24b05e6373e53513, 2: 785ed021d347d0d8}.
+PRE_SPEC3 = {0: "bf7aca62278997e9", 1: "c3326114a8f940f7", 2: "9432844bb8d191de"}
+PRE_SPEC3_8D_MODEL = {0: "4dcf69e1363d65db", 1: "24b05e6373e53513", 2: "785ed021d347d0d8"}
 
 
 def _fingerprint(seed):

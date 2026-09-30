@@ -156,7 +156,11 @@ class ACMIExporter:
                 lon, lat, alt = enu_to_llh(st["x"], st["y"], st["alt"])
                 yaw = heading_rad_to_yaw_deg(st["heading"])
                 # ACMI 2.2: T=lon|lat|alt|roll|pitch|yaw|...
-                t_str = f"T={lon:.6f}|{lat:.6f}|{alt:.1f}|||{yaw:.1f}"
+                roll, pitch = st.get("roll"), st.get("pitch")
+                if roll is None or pitch is None:
+                    t_str = f"T={lon:.6f}|{lat:.6f}|{alt:.1f}|||{yaw:.1f}"
+                else:   # Spec 8e: bank (lift vector) / flight-path angle
+                    t_str = f"T={lon:.6f}|{lat:.6f}|{alt:.1f}|{roll:.1f}|{pitch:.1f}|{yaw:.1f}"
 
                 lock_str = ""
                 lock = st.get("locked_target")

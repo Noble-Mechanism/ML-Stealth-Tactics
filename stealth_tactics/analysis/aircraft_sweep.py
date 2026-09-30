@@ -325,11 +325,17 @@ def format_calibration_8c(res: dict) -> str:
 
 def dive_climb_run(e: AircraftEnergyConfig, top_ft: float = 40_000.0, low_ft: float = 30_000.0,
                    start_mach: float = 0.9, climb_mach: float = 1.18, t_s: float = 900.0,
-                   dt: float = 0.05) -> dict:
+                   dt: float = 0.05, dive_rate_mps: Optional[float] = None) -> dict:
     """Start level at ``top_ft`` / ``start_mach``; dive to ``low_ft`` at full
     thrust until supersonic (min(climb_mach + 0.03, max_mach - 0.005)), then an
     energy-managed climb back to ``top_ft`` (climb only while Mach > climb_mach),
-    then hold level there for the rest of ``t_s``."""
+    then hold level there for the rest of ``t_s``.
+
+    Spec 8e: by default the dive is flown by the altitude hold, i.e. a steep
+    (up to 60 deg) inverted-pull dive that reaches ``low_ft`` quickly and then
+    accelerates level there; ``dive_rate_mps`` (e.g. the climb cap) flies a
+    constant-rate descent instead (the 8d dive, still accelerating while
+    descending)."""
     ac = _make_jet(e, top_ft * FT, start_mach)
     ac.cmd_speed_mps = 1.0e4
     trig = min(climb_mach + 0.03, e.max_mach - 0.005)
@@ -342,8 +348,11 @@ def dive_climb_run(e: AircraftEnergyConfig, top_ft: float = 40_000.0, low_ft: fl
         m = _mach(ac)
         if phase == "dive":
             ac.cmd_alt_m = low_ft * FT
+            if dive_rate_mps is not None:
+                ac.cmd_climb_rate_mps = -abs(dive_rate_mps)
             if m >= trig:
                 phase = "climb"
+                ac.cmd_climb_rate_mps = None
                 out.update(t_supersonic=t, alt_supersonic_ft=ac.state.alt / FT, mach_at_trigger=m)
         if phase == "climb":
             # Spec 8d: energy-managed Mach-hold climb (climb rate = Ps plus a

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable
 
@@ -416,6 +417,10 @@ class World:
                 "alt": ac.state.alt,
                 "heading": ac.state.heading_rad,
                 "speed": ac.state.speed_mps,
+                # Spec 8e: attitude for ACMI (bank of the lift vector, flight-
+                # path angle as pitch; point-mass, so no angle of attack)
+                "roll": math.degrees(ac.bank_rad),
+                "pitch": math.degrees(ac.gamma_rad),
                 "alive": ac.state.alive,
                 "name": ac.name,  # callsign → ACMI Pilot=
                 "type_name": ac.type_name,  # TacView Name=

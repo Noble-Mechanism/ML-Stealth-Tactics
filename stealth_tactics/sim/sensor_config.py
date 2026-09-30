@@ -289,6 +289,24 @@ class AircraftEnergyConfig:
     # jet levels off at the commanded altitude without overshoot.
     alt_hold_tau_s: float = 2.0
     alt_hold_decel_frac: float = 0.5
+    # Spec 8e "rolled pull": the lift vector (magnitude n in [0, n_cap], always
+    # positive g) can point anywhere around the velocity vector (bank phi,
+    # inverted included), so a big descent demand is flown as a rolled /
+    # inverted pull: V dgamma/dt = g (n cos phi - cos gamma) down to
+    # -(n_cap + cos gamma) g / V. A wings-level push is still floored at
+    # n_pushover_min (0 g). rolled_pull=False restores the Spec 8d vertical-
+    # first allocation. The jet only rolls into a pull when a 0 g push would
+    # need longer than rolled_pull_min_push_s to reach the desired gamma (or it
+    # is already past 90 deg bank), so small corrections stay wings-level.
+    rolled_pull: bool = True
+    rolled_pull_min_push_s: float = 3.0
+    # Max dive angle (deg) for commanded descents; None = Spec 8d symmetric
+    # climb/descent-rate cap (max_climb_rate_mps).
+    max_dive_deg: Optional[float] = 60.0
+    # Lift-vector rate limits (anti-jinking): bank-angle roll rate (deg/s)
+    # and load-factor onset/unload rate (g/s). None = instantaneous (Spec 8d).
+    roll_rate_deg_s: Optional[float] = 120.0
+    g_onset_g_s: Optional[float] = 6.0
 
     def cd0_factor(self, mach: float) -> float:
         m0, mp = self.cd0_rise_mach, self.cd0_peak_mach
@@ -329,6 +347,17 @@ RED_ENERGY = AircraftEnergyConfig(
     cd0_peak_mach=1.10, cd0_peak_factor=3.20, cd0_rise_power=3.0,
     cd0_decline_per_mach=4.0, thrust_ram_gain=0.0,
 )
+
+
+
+def spec8d_energy(e: AircraftEnergyConfig) -> AircraftEnergyConfig:
+    """The same airframe with the Spec 8d flight-path model: no rolled pull
+    (wings-level push floored at 0 g, vertical-first g allocation), the
+    symmetric climb/descent-rate cap and an instantaneous lift vector. Used
+    by tests and the 8d-vs-8e comparisons."""
+    import dataclasses as _dc
+    return _dc.replace(e, rolled_pull=False, max_dive_deg=None,
+                       roll_rate_deg_s=None, g_onset_g_s=None)
 
 
 # ------------------------------------------------ missile kinematics (3a) ---
