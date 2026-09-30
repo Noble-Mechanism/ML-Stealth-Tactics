@@ -104,7 +104,11 @@ def test_energy_turn_slower_at_high_alt_than_legacy_fixed_rate():
 
 def test_soft_speed_floor_limits_turn_rate():
     """At the speed floor at 40 kft lift < weight (Spec 8b): the jet cannot turn
-    for free; it rolls wings level and sinks to regain energy."""
+    for free; it rolls wings level and sinks to regain energy.
+
+    Spec 8d: the sink is a natural nose drop (gamma decreases at
+    g (n_lift - 1) / V), not the 8b instant sink rate, so after 1 s the jet
+    is only just descending; the 10 m altitude check is made after 3 s."""
     from stealth_tactics.sim.aircraft import _angle_diff
     from stealth_tactics.sim.missile_kinematics import atmosphere
     alt = 40_000 * FT
@@ -119,6 +123,10 @@ def test_soft_speed_floor_limits_turn_rate():
     rate = abs(math.degrees(_angle_diff(ac.state.heading_rad, h0)))
     assert ac.state.speed_mps >= BLUE_ENERGY.min_speed_mps
     assert rate < 5.0, rate
+    assert ac.gamma_rad < 0.0 and ac.state.alt < alt
+    for _ in range(40):                       # 2 s more
+        ac.cmd_heading_rad = ac.state.heading_rad + math.pi / 2
+        integrate_aircraft(ac, 0.05)
     assert ac.state.alt < alt - 10.0
 
 

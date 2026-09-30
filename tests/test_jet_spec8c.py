@@ -1,4 +1,8 @@
-"""Spec 8c: thrust retune (Blue climbs and accelerates, turns still bleed; Red ~25% better)."""
+"""Spec 8c: thrust retune (Blue climbs and accelerates, turns still bleed; Red ~25% better).
+
+Spec 8d: the climb schedules fly a direct climb-rate command and gamma is a
+load-factor-limited state; the 15 deg check starts established on the climb
+angle (entry from level costs ~0.05 Mach at 35 kft, reported in the sweep)."""
 
 from __future__ import annotations
 

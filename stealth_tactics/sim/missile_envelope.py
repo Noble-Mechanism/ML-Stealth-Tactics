@@ -398,9 +398,20 @@ class MissileEnvelope:
     # ---- geometry helpers (sim aircraft states) ----
     @staticmethod
     def geometry(shooter_state, target_state) -> Tuple[float, float, float, float, float]:
-        """(mean altitude m, shooter Mach, target aspect deg, target Mach,
-        signed launch off-nose deg)."""
-        alt = 0.5 * (shooter_state.alt + target_state.alt)
+        """(lookup altitude m, shooter Mach, target aspect deg, target Mach,
+        signed launch off-nose deg).
+
+        The table is co-altitude. Lookup altitude = mean of shooter and target
+        altitude, except (Spec 8d B) when the target is ABOVE the shooter: then
+        the shooter's altitude (conservative). A look-up shot climbs and flies
+        its boost in thicker air, so the mean-altitude table over-read Rmax by
+        30-50% (22.7 -> 41.5 kft: table 35.1 NM, fly-out 23.5 NM; at the
+        shooter's altitude the table gives 21.0 NM). Look-down shots keep the
+        mean altitude. Table and cache key are unchanged."""
+        if target_state.alt > shooter_state.alt:
+            alt = shooter_state.alt
+        else:
+            alt = 0.5 * (shooter_state.alt + target_state.alt)
         ms = shooter_state.speed_mps / atmosphere(shooter_state.alt)[1]
         mt = target_state.speed_mps / atmosphere(target_state.alt)[1]
         # aspect: angle between target velocity and the target->shooter line

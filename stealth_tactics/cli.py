@@ -686,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ms.set_defaults(func=cmd_missile_sweep)
 
     p_as = sub.add_parser("aircraft-sweep",
-                          help="Spec 8/8b/8c: jet bleed check, performance table, climb/accel calibration")
+                          help="Spec 8/8b/8c/8d: jet bleed check, performance table, climb/accel calibration")
     p_as.add_argument("--n-max", type=float, nargs="+", default=None,
                       help="structural load-factor caps to sweep (default: the type's "
                            "own, lift-limited)")

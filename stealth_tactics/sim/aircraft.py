@@ -159,6 +159,13 @@ class Aircraft:
     # Spec 8: sign of the turn in progress (+1 right, -1 left, 0 none). Used for
     # turn-direction hysteresis when the commanded heading is ~180 deg away.
     turn_dir: float = 0.0
+    # Spec 8d: flight-path angle (rad, + = climbing). A state: it changes only
+    # at the rate the vertical load factor allows (see integrate_aircraft).
+    gamma_rad: float = 0.0
+    # Spec 8d: optional direct climb-rate command (m/s). None (default) = the
+    # altitude hold on cmd_alt_m sets the desired climb rate. Analysis tools
+    # use it to fly climb schedules (constant gamma, Mach hold).
+    cmd_climb_rate_mps: Optional[float] = None
 
     def __post_init__(self) -> None:
         self.ammo = self.params.ammo
@@ -195,13 +202,36 @@ class Aircraft:
         )
 
 
-def integrate_aircraft(ac: Aircraft, dt: float) -> None:
-    """Advance point-mass kinematics with the Spec 8 / 8b energy model.
+def _alt_hold_rate(err: float, e: AircraftEnergyConfig, max_climb: float,
+                   cos_g: float, n_cap: float) -> float:
+    """Spec 8d altitude hold: desired climb rate (m/s) for an altitude error.
 
-    Commands stay heading / speed / altitude. Turn rate is limited by
-    min(n_max, q S CLmax / W), drag (transonic Cd0 rise + induced) and thrust
-    (density lapse, ram gain) set along-track accel, and climb costs energy via
-    sin(γ). A jet that cannot hold 1 g sinks.
+    |vs| = min(max climb, |err| / tau, sqrt(2 a_stop |err|)). a_stop is a
+    fraction of the jet's ability to arrest the vertical speed: push-over
+    capability (cos gamma - n_pushover_min) when climbing to the target,
+    pull-up capability (n_cap - cos gamma) when descending to it."""
+    if err == 0.0:
+        return 0.0
+    cap = (cos_g - e.n_pushover_min) if err > 0.0 else (n_cap - cos_g)
+    a_stop = e.alt_hold_decel_frac * G0 * max(cap, 0.1)
+    ae = abs(err)
+    vs = min(max_climb, ae / max(e.alt_hold_tau_s, 1e-6), math.sqrt(2.0 * a_stop * ae))
+    return math.copysign(vs, err)
+
+
+def integrate_aircraft(ac: Aircraft, dt: float) -> None:
+    """Advance point-mass kinematics with the Spec 8 / 8b / 8d energy model.
+
+    Commands stay heading / speed / altitude (or an optional direct climb
+    rate). Spec 8d: the flight-path angle gamma is a state. The vertical load
+    factor n_v sets its rate, V dgamma/dt = g (n_v - cos gamma), with n_v in
+    [n_pushover_min, n_cap] and n_cap = min(n_max, q S CLmax / W). The g
+    budget is shared with the horizontal turn, vertical demand first:
+    n_h <= sqrt(n_cap^2 - n_v^2). Induced drag uses the total load factor
+    n_v^2 + n_h^2. A jet whose lift cannot carry cos gamma drops its nose
+    (gamma decreases) instead of the Spec 8b ad-hoc sink. Drag (transonic Cd0
+    rise + induced) and thrust (density lapse) set along-track accel, and
+    climb costs energy via sin(gamma).
     """
     if not ac.state.alive:
         return
@@ -214,15 +244,8 @@ def integrate_aircraft(ac: Aircraft, dt: float) -> None:
     # Hard altitude / Mach ceilings from energy config
     max_alt = min(p.max_alt_m, e.max_alt_m)
     v_ceil = e.max_mach * a_sound
-
-    # --- climb rate toward cmd_alt (still rate-limited) ---------------------
     floor = max(p.min_alt_m, alt_floor_m(st.x, st.y))
-    target_alt = float(np.clip(ac.cmd_alt_m, floor, max_alt))
     max_climb = p.max_climb_rate_mps
-    climb_rate = float(np.clip(target_alt - st.alt, -max_climb * dt, max_climb * dt) / dt) \
-        if dt > 0 else 0.0
-    # Flight-path angle from the climb/descent; clip so |sin γ| <= 1
-    sin_g = float(np.clip(climb_rate / V, -0.95, 0.95))
 
     # --- drag / thrust terms (Spec 8b: transonic Cd0 rise, thrust vs Mach) ---
     mach = V / a_sound
@@ -238,30 +261,48 @@ def integrate_aircraft(ac: Aircraft, dt: float) -> None:
 
     # --- available load factor: min(n_max, lift limit) (Spec 8b) -----------
     n_lift = qS * e.CLmax / W
-    n_cap = min(max(e.n_max, 1.0 + 1e-9), n_lift)
-    max_sink = -min(0.95, max_climb / V)
-    if n_lift < 1.0:
-        # Cannot hold 1 g: wings level and sink (lift = W cos(gamma)), full
-        # thrust. The jet must descend to regain energy.
-        sin_g = min(sin_g, max(-math.sqrt(1.0 - n_lift * n_lift), max_sink))
-        climb_rate = sin_g * V
-        thrust = t_avail
-    elif dt > 0:
-        # Soft speed floor (Spec 8 A1.6): at min_speed_mps a jet can only pull
-        # the load factor its full thrust sustains. If even 1 g level cannot be
-        # held there, it unloads to 1 g and descends (glides) to hold the floor.
+    n_cap = min(e.n_max, n_lift)             # may be < 1 (Spec 8d: nose drops)
+    gam = float(ac.gamma_rad)
+    cos_g, sin_g = math.cos(gam), math.sin(gam)
+
+    # --- desired climb rate / flight-path angle -----------------------------
+    target_alt = float(np.clip(ac.cmd_alt_m, floor, max_alt))
+    if ac.cmd_climb_rate_mps is not None:
+        vs_des = float(np.clip(ac.cmd_climb_rate_mps, -max_climb, max_climb))
+        # never command through the ceiling / floor
+        vs_des = min(vs_des, max(0.0, _alt_hold_rate(max_alt - st.alt, e, max_climb, cos_g, n_cap)))
+        vs_des = max(vs_des, min(0.0, _alt_hold_rate(floor - st.alt, e, max_climb, cos_g, n_cap)))
+    else:
+        vs_des = _alt_hold_rate(target_alt - st.alt, e, max_climb, cos_g, n_cap)
+    s_max = e.max_sin_gamma
+    gam_des = math.asin(float(np.clip(vs_des / V, -s_max, s_max)))
+
+    # Soft speed floor (Spec 8 A1.6): at min_speed_mps a jet can only pull the
+    # load factor its full thrust sustains; if even 1 g cannot be held there
+    # it glides (gamma capped at the glide angle) to hold the floor.
+    n_budget = n_cap
+    if dt > 0:
         need = (e.min_speed_mps - st.speed_mps) / dt + G0 * sin_g   # required (T-D)/m
         n2_floor = (t_avail - d0 - e.mass_kg * need) / max(kind, 1e-9)
         if n2_floor < n_cap * n_cap:
             if n2_floor >= 1.0:
-                n_cap = float(np.sqrt(n2_floor))
+                n_budget = float(np.sqrt(n2_floor))
             else:
-                n_cap = 1.0
+                n_budget = min(n_cap, 1.0)
                 sin_glide = ((t_avail - d0 - kind) / e.mass_kg
                              - (e.min_speed_mps - st.speed_mps) / dt) / G0
-                sin_g = min(sin_g, max(sin_glide, max_sink))
-                climb_rate = sin_g * V
+                gam_des = min(gam_des, math.asin(float(np.clip(sin_glide, -s_max, s_max))))
                 thrust = t_avail
+
+    # --- vertical load factor first (Spec 8d) -------------------------------
+    n_v_des = cos_g + (V * (gam_des - gam) / (G0 * dt) if dt > 0 else 0.0)
+    n_v_lo = max(e.n_pushover_min, -n_cap)
+    n_v = min(max(n_v_des, n_v_lo), n_cap)
+    if n_v_des > n_cap + 1e-9:
+        thrust = t_avail                     # lift-limited in pitch: full thrust
+
+    # --- horizontal turn with the remaining g budget -------------------------
+    n_h_cap = math.sqrt(max(min(n_budget, n_cap) ** 2 - n_v * n_v, 0.0))
     dh = _angle_diff(ac.cmd_heading_rad, st.heading_rad)
     # Turn-direction hysteresis: with the command within TURN_REVERSAL_BAND of
     # dead astern, keep turning the way the jet already is instead of letting a
@@ -271,31 +312,42 @@ def integrate_aircraft(ac: Aircraft, dt: float) -> None:
         dh += 2.0 * math.pi * ac.turn_dir
     elif ac.turn_dir == 0.0 and abs(dh) > math.pi - 1e-6:
         dh = abs(dh)          # exact reversal from straight flight: tie-break right
-    omega_max = G0 * np.sqrt(max(n_cap * n_cap - 1.0, 0.0)) / V
+    cos_h = max(cos_g, 0.05)
+    omega_max = G0 * n_h_cap / (V * cos_h)
     omega_cmd = dh / dt if dt > 0 else 0.0
     omega = float(np.clip(omega_cmd, -omega_max, omega_max))
     ac.turn_dir = float(np.sign(omega)) if abs(omega_cmd) > omega_max else 0.0
     st.heading_rad = _wrap_pi(st.heading_rad + omega * dt)
-    n_horiz = V * abs(omega) / G0
-    n = float(np.sqrt(1.0 + n_horiz * n_horiz)) if n_lift >= 1.0 else n_lift
-    if n > 1.0 + 1e-9 and n_cap < max(e.n_max, 1.0 + 1e-9):
+    n_h = V * abs(omega) * cos_h / G0
+    if n_h > 1e-9 and abs(omega_cmd) > omega_max and min(n_budget, n_cap) < e.n_max:
         thrust = t_avail                     # limited turn: full thrust
 
-    # --- along-track accel ---------------------------------------------------
-    drag = d0 + kind * n * n
-    accel = (thrust - drag) / e.mass_kg - G0 * sin_g
+    # --- along-track accel (total load factor in induced drag) ---------------
+    gam_new = gam + (G0 * (n_v - cos_g) / V * dt if dt > 0 else 0.0)
+    g_lim = math.asin(s_max)
+    gam_new = min(max(gam_new, -g_lim), g_lim)
+    drag = d0 + kind * (n_v * n_v + n_h * n_h)
+    accel = (thrust - drag) / e.mass_kg - G0 * math.sin(gam_new)
     st.speed_mps = float(st.speed_mps + accel * dt)
     # Soft floor (see above), hard Mach ceiling
     st.speed_mps = float(np.clip(st.speed_mps, e.min_speed_mps, v_ceil))
+    # Max climb / descent rate cap (kept from Spec 8)
+    vmax_s = min(s_max, max_climb / max(st.speed_mps, 1e-6))
+    if abs(math.sin(gam_new)) > vmax_s:
+        gam_new = math.copysign(math.asin(vmax_s), gam_new)
 
     # --- altitude + position ------------------------------------------------
-    st.alt = float(np.clip(st.alt + climb_rate * dt, floor, max_alt))
+    new_alt = st.alt + st.speed_mps * math.sin(gam_new) * dt
+    if new_alt >= max_alt and gam_new > 0.0:
+        new_alt, gam_new = max_alt, 0.0      # hard ceiling: level off
+    elif new_alt <= floor and gam_new < 0.0:
+        new_alt, gam_new = floor, 0.0        # hard floor: level off
+    st.alt = float(np.clip(new_alt, floor, max_alt))
+    ac.gamma_rad = gam_new
     # Position: heading 0 = North (+Y), clockwise toward East (+X)
-    # Horizontal speed = V * cos(γ); use remaining after climb component
-    cos_g = float(np.sqrt(max(0.0, 1.0 - sin_g * sin_g)))
-    v_h = st.speed_mps * cos_g
-    st.x += v_h * np.sin(st.heading_rad) * dt
-    st.y += v_h * np.cos(st.heading_rad) * dt
+    v_h = st.speed_mps * math.cos(gam_new)
+    st.x += v_h * math.sin(st.heading_rad) * dt
+    st.y += v_h * math.cos(st.heading_rad) * dt
 
 
 def _wrap_pi(a: float) -> float:

@@ -10,7 +10,7 @@ ACMI 2.2 for visual playback.
 ## Simulation model
 
 - **Point-mass** kinematics in local ENU (East, North, Up) meters.
-- State per aircraft: `x, y, alt, heading, speed, alive`.
+- State per aircraft: `x, y, alt, heading, speed, alive` (+ flight-path angle `gamma_rad`, Spec 8d).
 - Heading convention: **0 = North**, increasing **clockwise** (aviation/TacView yaw).
 - Limits (Spec 8): n-limited turn (energy model), climb rate (m/s), Mach/altitude
   ceilings, min speed. Drag + density thrust replace the old fixed turn rate /
@@ -27,6 +27,12 @@ ACMI 2.2 for visual playback.
   Blue holds M1.0 in a 15 deg climb at 35 kft, climbs 30->40 kft in ~34-39 s, and
   accelerates level at 40 kft from M0.9 to 1.2 slowly (~131 s). Red is ~25% better
   (Ps, sustained g; max g +15%). See `specs/08c-thrust-retune.md`.
+  Spec 8d: the flight-path angle is a state (`Aircraft.gamma_rad`); its rate is
+  limited by the vertical load factor (pull-up <= g (n_cap - cos gamma) / V,
+  0 g push-over floor), the g budget is shared with the turn (vertical first)
+  and induced drag uses the total load factor. `cmd_alt` drives an altitude
+  hold that levels off without overshoot. No more free climb/dive jinking; a jet
+  below 1 g lift drops its nose. See `specs/08d-flight-path-and-launch.md`.
 - **Ground (Spec 3):** flat ground at 0 m (`aircraft.GROUND_ALT_M`); hard
   **100 m AGL floor** for every aircraft (`ALT_FLOOR_AGL_M`, enforced in
   `integrate_aircraft`). A missile that reaches the ground ends with outcome `ground`.
@@ -108,6 +114,9 @@ sourced missile data.
   − for "lag"; lag shots past ~55° (vs Mach 0.9 targets) cannot turn without
   bleeding below Mach 1.2. Lookups with at least half their interpolation
   weight on no-shot cells return 0.
+  Lookup altitude = mean of shooter and target, except the shooter's altitude
+  when the target is above it (Spec 8d: the co-altitude table over-read
+  look-up Rmax by 30-50%).
   `WeaponModel.envelope_for(shooter, target)` returns (Rmax, Rne) for the
   tactics (and Spec 5 network inputs). The genome's shoot-range fraction and
   Red's 0.8 factor now scale the table Rmax.

@@ -277,6 +277,18 @@ class AircraftEnergyConfig:
     # Thrust vs Mach (ram recovery above the reference Mach); 0 in Spec 8c
     thrust_ram_gain: float = 0.0
     thrust_ram_ref_mach: float = 0.9
+    # Spec 8d flight-path dynamics. The flight-path angle gamma is a state;
+    # its rate is set by the vertical load factor n_v (V dgamma/dt =
+    # g (n_v - cos gamma)), with n_v in [n_pushover_min, n_cap] and the total
+    # load factor sqrt(n_v^2 + n_h^2) <= n_cap (vertical demand first).
+    n_pushover_min: float = 0.0          # push-over floor (g); 0 g = unloaded
+    max_sin_gamma: float = 0.95          # |sin gamma| cap (as before 8d)
+    # Altitude hold (cmd_alt -> desired climb rate): |vs| <= min(max climb,
+    # |err| / alt_hold_tau_s, sqrt(2 a_stop |err|)), where a_stop =
+    # alt_hold_decel_frac x g x (push-over or pull-up capability), so the
+    # jet levels off at the commanded altitude without overshoot.
+    alt_hold_tau_s: float = 2.0
+    alt_hold_decel_frac: float = 0.5
 
     def cd0_factor(self, mach: float) -> float:
         m0, mp = self.cd0_rise_mach, self.cd0_peak_mach

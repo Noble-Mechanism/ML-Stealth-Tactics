@@ -163,11 +163,14 @@ def test_drag_depth_by_aggressiveness_and_floor():
 
 
 def test_altitude_floor_100m_agl():
+    # Spec 8d: the altitude hold eases onto the (clamped) target instead of
+    # snapping to it, so give it 10 s (was 5 s, exact); never below the floor.
     ac = red(alt=150.0)
     ac.cmd_alt_m = -500.0
-    for _ in range(10):
+    for _ in range(20):
         integrate_aircraft(ac, 0.5)
-    assert ac.state.alt == pytest.approx(100.0)
+        assert ac.state.alt >= 100.0
+    assert ac.state.alt == pytest.approx(100.0, abs=1.0)
 
 
 def test_missile_hitting_ground_is_lost():
@@ -575,7 +578,12 @@ OLD_F35_TABLE = ((0.0, 0.05), (30.0, 0.10), (60.0, 0.45), (90.0, 0.90), (135.0, 
 # drag-rise shape, Red CLmax 1.5 and climb cap 112.5 m/s): jet paths change; the
 # missile is unchanged. Spec 8b values were
 # {0: 6b4cb09c3f55ddbf, 1: dd4c697b4e8f3036, 2: 757071008f10ec92}.
-PRE_SPEC3 = {0: "17c0b3f87d650fae", 1: "3f44f44d59a68361", 2: "9a4409c641ca401a"}
+# Re-baselined for Spec 8d (flight-path angle is a load-factor-limited state,
+# shared g budget, altitude hold; envelope lookup at the shooter's altitude
+# for look-up shots): jet paths and Rmax gates change; the missile fly-out is
+# unchanged. Spec 8c values were
+# {0: 17c0b3f87d650fae, 1: 3f44f44d59a68361, 2: 9a4409c641ca401a}.
+PRE_SPEC3 = {0: "4dcf69e1363d65db", 1: "24b05e6373e53513", 2: "785ed021d347d0d8"}
 
 
 def _fingerprint(seed):

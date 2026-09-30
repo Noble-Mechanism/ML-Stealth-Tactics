@@ -1,4 +1,4 @@
-"""Spec 8 / 8b / 8c: jet energy calibration (bleed, lift limit, transonic hump, climb)."""
+"""Spec 8 / 8b / 8c / 8d: jet energy calibration (bleed, lift limit, transonic hump, climb)."""
 
 from __future__ import annotations
 
@@ -183,17 +183,23 @@ def gamma_climb_margin(e: AircraftEnergyConfig, alt_ft: float = 35_000.0, mach: 
 
 
 def gamma_climb_run(e: AircraftEnergyConfig, alt_ft: float = 35_000.0, mach: float = 1.0,
-                    gamma_deg: float = 15.0, t_s: float = 5.0, dt: float = 0.05) -> dict:
+                    gamma_deg: float = 15.0, t_s: float = 5.0, dt: float = 0.05,
+                    start_gamma_deg: Optional[float] = None) -> dict:
     """Integrator check: full thrust, climb at a fixed flight-path angle."""
     ac = _make_jet(e, alt_ft * FT, mach)
     ac.cmd_speed_mps = 1.0e4
     sg = math.sin(math.radians(gamma_deg))
+    # Spec 8d: start already established on the climb angle (steady-climb
+    # check); pass start_gamma_deg=0 to include the pull-up from level.
+    ac.gamma_rad = math.radians(gamma_deg if start_gamma_deg is None else start_gamma_deg)
     for _ in range(int(round(t_s / dt))):
-        ac.cmd_alt_m = ac.state.alt + ac.state.speed_mps * sg * dt
+        # Spec 8d: direct climb-rate command (gamma is a rate-limited state)
+        ac.cmd_climb_rate_mps = ac.state.speed_mps * sg
         integrate_aircraft(ac, dt)
     return {"alt_ft": alt_ft, "mach0": mach, "gamma_deg": gamma_deg, "t_s": t_s,
             "final_mach": _mach(ac), "final_alt_ft": ac.state.alt / FT,
-            "climb_fpm": ac.state.speed_mps * sg / FT * 60.0}
+            "climb_fpm": ac.state.speed_mps * math.sin(ac.gamma_rad) / FT * 60.0,
+            "final_gamma_deg": math.degrees(ac.gamma_rad)}
 
 
 def climb_run(e: AircraftEnergyConfig, schedule: str = "max_rate", start_ft: float = 30_000.0,
@@ -201,8 +207,10 @@ def climb_run(e: AircraftEnergyConfig, schedule: str = "max_rate", start_ft: flo
               t_max: float = 600.0, dt: float = 0.05) -> dict:
     """Full-thrust climb from start_ft to end_ft. Schedules:
 
-    - ``max_rate``: command end_ft; climb at the type's max climb rate (90 m/s
-      Blue, 112.5 m/s Red), speed floats.
+    - ``max_rate``: climb-rate command = the type's max climb rate (90 m/s
+      Blue, 112.5 m/s Red), speed floats; time = first crossing of end_ft.
+    - ``alt_hold``: command cmd_alt = end_ft (Spec 8d altitude hold, which
+      levels off without overshoot); time = within 30 m of end_ft.
     - ``gamma``: constant flight-path angle ``gamma_deg``.
     - ``mach_hold``: climb at the rate that holds the start Mach (climb rate =
       Ps), capped at the max climb rate.
@@ -214,21 +222,26 @@ def climb_run(e: AircraftEnergyConfig, schedule: str = "max_rate", start_ft: flo
     sg = math.sin(math.radians(gamma_deg))
     a0 = atmosphere(start_ft * FT)[1]
     while t < t_max:
+        # Spec 8d: schedules fly a direct climb-rate command (gamma follows
+        # at the rate the load factor allows); alt_hold uses cmd_alt.
         if schedule == "max_rate":
+            ac.cmd_climb_rate_mps = ac.params.max_climb_rate_mps
+        elif schedule == "alt_hold":
             ac.cmd_alt_m = top
         elif schedule == "gamma":
-            ac.cmd_alt_m = min(top, ac.state.alt + ac.state.speed_mps * sg * dt)
+            ac.cmd_climb_rate_mps = ac.state.speed_mps * sg
         elif schedule == "mach_hold":
             ps = specific_excess_power(e, ac.state.alt / FT, _mach(ac))
             # climb at Ps, plus/minus a correction toward the start Mach
             err = (_mach(ac) - start_mach) * atmosphere(ac.state.alt)[1]
-            ac.cmd_alt_m = min(top, ac.state.alt + max(0.0, ps + 2.0 * err) * dt)
+            ac.cmd_climb_rate_mps = max(0.0, ps + 2.0 * err)
         else:
             raise ValueError(schedule)
         integrate_aircraft(ac, dt)
         t += dt
         m_min = min(m_min, _mach(ac))
-        if ac.state.alt >= top - 1.0:
+        tol = 30.0 if schedule == "alt_hold" else 1.0
+        if ac.state.alt >= top - tol:
             t_hit = t
             break
     return {"schedule": schedule, "start_ft": start_ft, "end_ft": end_ft,
@@ -260,10 +273,12 @@ def calibration_8c() -> dict:
     for name, e in (("Blue", BLUE_ENERGY), ("Red", RED_ENERGY)):
         r = {"gamma_margin": gamma_climb_margin(e),
              "gamma_run": gamma_climb_run(e),
+             "gamma_run_from_level": gamma_climb_run(e, start_gamma_deg=0.0),
              "climb_max_rate": climb_run(e, "max_rate"),
              "climb_gamma15": climb_run(e, "gamma", gamma_deg=15.0),
              "climb_mach_hold": climb_run(e, "mach_hold"),
              "climb_plain_m09": climb_run(e, "max_rate", start_mach=0.9),
+             "climb_alt_hold": climb_run(e, "alt_hold"),
              "accel_40k_12": accel_time_s(e, 40_000.0, 0.9, 1.2),
              "bleed": bleed_run(energy=e)}
         if e.max_mach > 1.2:
@@ -281,13 +296,16 @@ def format_calibration_8c(res: dict) -> str:
             f"{name}:",
             f"  35 kft M1.0 gamma 15 deg: (T-D)/(W sin g) = {r['gamma_margin']:.3f}; "
             f"5 s run M1.000 -> {r['gamma_run']['final_mach']:.3f} "
-            f"({r['gamma_run']['climb_fpm']:.0f} ft/min)",
+            f"({r['gamma_run']['climb_fpm']:.0f} ft/min); from level (incl. pull-up) "
+            f"-> M{r['gamma_run_from_level']['final_mach']:.3f}",
             f"  30->40 kft from M1.0, max-rate climb: {f(r['climb_max_rate']['t_s'])} s "
             f"(end M{r['climb_max_rate']['end_mach']:.3f}, min M{r['climb_max_rate']['min_mach']:.3f})",
             f"  30->40 kft from M1.0, gamma 15 deg:  {f(r['climb_gamma15']['t_s'])} s "
             f"(end M{r['climb_gamma15']['end_mach']:.3f})",
             f"  30->40 kft from M1.0, Mach hold:     {f(r['climb_mach_hold']['t_s'])} s "
             f"(end M{r['climb_mach_hold']['end_mach']:.3f})",
+            f"  30->40 kft from M1.0, alt hold (cmd_alt 40 kft, within 30 m): "
+            f"{f(r['climb_alt_hold']['t_s'])} s (end M{r['climb_alt_hold']['end_mach']:.3f})",
             f"  30->40 kft from M0.9, plain full power (max-rate): "
             f"{f(r['climb_plain_m09']['t_s'])} s (end M{r['climb_plain_m09']['end_mach']:.3f}, "
             f"min M{r['climb_plain_m09']['min_mach']:.3f})",
@@ -328,8 +346,14 @@ def dive_climb_run(e: AircraftEnergyConfig, top_ft: float = 40_000.0, low_ft: fl
                 phase = "climb"
                 out.update(t_supersonic=t, alt_supersonic_ft=ac.state.alt / FT, mach_at_trigger=m)
         if phase == "climb":
-            ac.cmd_alt_m = min(top_m, ac.state.alt + (300.0 if m > climb_mach else 0.0))
-            if ac.state.alt >= top_m - 1.0:
+            # Spec 8d: energy-managed Mach-hold climb (climb rate = Ps plus a
+            # correction toward climb_mach). The 8c bang-bang schedule (climb
+            # only while M > climb_mach) now pays for every pitch change.
+            ps = specific_excess_power(e, ac.state.alt / FT, m)
+            a_s = atmosphere(ac.state.alt)[1]
+            ac.cmd_climb_rate_mps = max(0.0, ps + 2.0 * (m - climb_mach) * a_s)
+            if ac.state.alt >= top_m - 30.0:
+                ac.cmd_climb_rate_mps = None
                 phase = "hold"
                 out.update(t_arrive=t, mach_arrive=m)
         if phase == "hold":
