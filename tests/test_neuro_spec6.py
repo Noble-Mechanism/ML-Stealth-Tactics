@@ -145,7 +145,7 @@ def test_mutation_statistics():
     ch = mutate(par, np.random.default_rng(11), 99, 5)
     d = ch.weights - w
     assert abs(d.std() / ch.sigma - 1) < 0.02 and abs(d.mean()) < 0.05 * ch.sigma
-    assert ch.lineage == {"id": 99, "parent": 1, "born": 5, "origin": "random"}
+    assert ch.lineage == {"id": 99, "parent": 1, "born": 5, "origin": "random", "root": 1}
     logs = []
     for i in range(3000):
         s = mutate(NetGenome([np.zeros(3)], 0.02, {}), np.random.default_rng(i), 0, 0).sigma
@@ -228,7 +228,7 @@ class FakeTask:
 
 def test_selection_elites_parents_and_hall_of_fame(tmp_path):
     cfg = NeuroConfig(population=20, elites=2, truncation=5, init="random", top_every=2,
-                      arch=Arch(hidden=(4,)).to_dict())
+                      bench_cache=False, arch=Arch(hidden=(4,)).to_dict())
     task = FakeTask()
     ga = NeuroGA(cfg, tmp_path, workers=1, task=task, log=lambda *a: None)
     ga.init_population()
@@ -257,9 +257,11 @@ def test_selection_elites_parents_and_hall_of_fame(tmp_path):
 
 
 def test_stagnation_boost_and_archive_cap(tmp_path):
+    # the spec 6 boost, still available through the config (spec 6b defaults differ)
     cfg = NeuroConfig(population=12, elites=2, truncation=4, init="random", stagnation_gens=3,
-                      boost_gens=2, archive_add=2, archive_cap=5,
-                      arch=Arch(hidden=(4,)).to_dict())
+                      stagnation_metric="champion", boost_gens=2, boost_sigma_mult=2.0,
+                      immigrate_every=0, stagnation_immigrants=0, champion_margin_k=0.0,
+                      archive_add=2, archive_cap=5, arch=Arch(hidden=(4,)).to_dict())
     ga = NeuroGA(cfg, tmp_path, workers=1, task=FakeTask(flat=True), log=lambda *a: None)
     ga.init_population()
     sig = []

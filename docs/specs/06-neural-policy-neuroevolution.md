@@ -9,6 +9,12 @@ The questions at the end are now recorded answers, and the Implementation
 section at the end gives the results. Numbers are still prototype
 placeholders, as in specs 1–5; fitness is today's placeholder (spec 7 owns it).
 
+**Update (spec 6b, 2026-09-30):** `docs/specs/06b-ga-stability.md` replaces
+the L stagnation boost (now a moving-average trigger answered by immigration;
+the old boost stays available through the config), changes the M champion
+rule (top 3 benchmarked every generation, paired k·SE margin) and raises G to
+36 presentations.
+
 **Update (Rusty, 2026-09-26, play package):** fitness is now spec 7 v1
 (`docs/specs/07-fitness.md`; network fitness = mean − 0.5 × std). The default
 start population is **all random** (`--init mixed` keeps 10 clones + 40

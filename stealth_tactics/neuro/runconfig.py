@@ -12,8 +12,8 @@ def add_run_args(p: argparse.ArgumentParser, gens_default) -> None:
     p.add_argument("--pop", type=int, default=50, help="population size (default 50)")
     p.add_argument("--gens", type=int, default=gens_default,
                    help="total generations (overnight: default = run until stopped)")
-    p.add_argument("--presentations", type=int, default=24,
-                   help="presentations per network per generation (default 24)")
+    p.add_argument("--presentations", type=int, default=36,
+                   help="presentations per network per generation (default 36)")
     p.add_argument("--benchmark", type=int, default=64)
     p.add_argument("--test-size", type=int, default=256)
     p.add_argument("--n-red", type=int, default=6, help="Red flight size (6 or 8)")
@@ -32,6 +32,29 @@ def add_run_args(p: argparse.ArgumentParser, gens_default) -> None:
     p.add_argument("--max-time", type=float, default=360.0)
     p.add_argument("--workers", type=int, default=os.cpu_count() or 8,
                    help="worker processes (default: all cores)")
+    d = NeuroConfig.__dataclass_fields__
+    g = p.add_argument_group("GA stability (spec 6b)")
+    g.add_argument("--stagnation-gens", type=int, default=d["stagnation_gens"].default,
+                   help="generations without a new high of the moving average of the best "
+                        "score before the stagnation immigration (default 60; 0 disables)")
+    g.add_argument("--stagnation-window", type=int, default=d["stagnation_window"].default,
+                   help="moving-average window in generations (default 10)")
+    g.add_argument("--stagnation-immigrants", type=int,
+                   default=d["stagnation_immigrants"].default,
+                   help="immigrants when the stagnation trigger fires (default 16)")
+    g.add_argument("--immigrate-every", type=int, default=d["immigrate_every"].default,
+                   help="periodic immigration every N generations (default 25; 0 disables)")
+    g.add_argument("--immigrants", type=int, default=d["immigrants"].default,
+                   help="immigrants per periodic immigration (default 8)")
+    g.add_argument("--immigrant-random-frac", type=float,
+                   default=d["immigrant_random_frac"].default,
+                   help="share of random nets among immigrants; the rest are mutated "
+                        "hall-of-fame cells outside the champion's lineage (default 0.5)")
+    g.add_argument("--champion-k", type=float, default=d["champion_margin_k"].default,
+                   help="a challenger must beat the champion by more than k standard errors "
+                        "of the paired benchmark difference (default 1; 0 = higher score wins)")
+    g.add_argument("--top-n", type=int, default=d["top_n"].default,
+                   help="top networks by eval fitness benchmarked per generation (default 3)")
 
 
 def config_from_args(args) -> NeuroConfig:
@@ -43,7 +66,13 @@ def config_from_args(args) -> NeuroConfig:
                        n_clones=min(10, args.pop), n_red=args.n_red,
                        blue_start=args.blue_start,
                        fitness=load_weights(args.fitness, parse_overrides(args.fw)),
-                       arch={**NeuroConfig().arch, "encoder": args.encoder})
+                       arch={**NeuroConfig().arch, "encoder": args.encoder},
+                       stagnation_gens=args.stagnation_gens,
+                       stagnation_window=args.stagnation_window,
+                       stagnation_immigrants=args.stagnation_immigrants,
+                       immigrate_every=args.immigrate_every, immigrants=args.immigrants,
+                       immigrant_random_frac=args.immigrant_random_frac,
+                       champion_margin_k=args.champion_k, top_n=args.top_n)
 
 
 def ensure_clone(args, out) -> str | None:

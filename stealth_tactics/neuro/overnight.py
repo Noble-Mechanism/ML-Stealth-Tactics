@@ -6,7 +6,9 @@ with the same command resumes from the latest one (byte-identical to an
 uninterrupted run). Every ``--every`` generations (default 10) it refreshes
 ``<out>/progress/``: fitness chart PNG, champion best / worst ACMIs (+ weights,
 replayable with ``replay-champion <out>/progress``), the hall of fame (each
-cell replayable the same way), ``hall_of_fame.md`` and ``progress.md``.
+cell replayable the same way), ``hall_of_fame.md``, ``progress.md`` and the
+per-generation history (``history.csv`` / ``history.json``, spec 6b; the run
+directory has the same files updated every generation).
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ import numpy as np
 
 from .checkpoint import write_json
 from stealth_tactics.fitness import merge_outcome_counts
-from .neuroga import NeuroGA, _summ
+from .neuroga import NeuroGA, _summ, write_history_files
 
 
 def _chart(history, path: Path) -> bool:
@@ -31,14 +33,43 @@ def _chart(history, path: Path) -> bool:
     except ImportError:
         return False
     g = [r["generation"] for r in history]
-    fig, ax = plt.subplots(figsize=(9, 5), dpi=110)
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(9, 7), dpi=110, sharex=True,
+                                  gridspec_kw={"height_ratios": [3, 1]})
     ax.plot(g, [r["best_fitness"] for r in history], label="best (eval set)")
     ax.plot(g, [r["mean_fitness"] for r in history], label="mean (eval set)")
+    if any(r.get("median_fitness") is not None for r in history):
+        ax.plot(g, [r.get("median_fitness") for r in history], alpha=0.6, label="median (eval set)")
+    if any(r.get("best_ma") is not None for r in history):
+        ax.plot(g, [r.get("best_ma") for r in history], "--", label="best, moving average")
     ax.plot(g, [r["champion_bench"] for r in history], "k:", label="champion (benchmark)")
-    ax.set_xlabel("generation")
+    first = {"immig": True, "stag": True, "champ": True}
+    for r in history:
+        if r.get("immigrants"):
+            ax.axvline(r["generation"], color="g", alpha=0.3,
+                       label="immigration" if first["immig"] else None)
+            first["immig"] = False
+        if r.get("stagnation_trigger") or r.get("boosted"):
+            ax.axvline(r["generation"], color="r", ls="--", alpha=0.5,
+                       label="stagnation trigger" if first["stag"] else None)
+            first["stag"] = False
+        dec = r.get("champion_decision") or {}
+        if dec.get("accepted") and dec.get("champion_id") is not None:
+            ax.plot(r["generation"], r["champion_bench"], "k^", ms=5,
+                    label="new champion" if first["champ"] else None)
+            first["champ"] = False
     ax.set_ylabel("fitness (mean - std_coef x std)")
     ax.grid(alpha=0.3)
-    ax.legend()
+    ax.legend(fontsize=8)
+    ax2.plot(g, [r["mean_sigma"] for r in history], label="mean sigma")
+    if any("min_sigma" in r for r in history):
+        ax2.fill_between(g, [r.get("min_sigma", r["mean_sigma"]) for r in history],
+                         [r.get("max_sigma", r["mean_sigma"]) for r in history], alpha=0.2,
+                         label="min-max sigma")
+    ax2.set_yscale("log")
+    ax2.set_xlabel("generation")
+    ax2.set_ylabel("mutation sigma")
+    ax2.grid(alpha=0.3)
+    ax2.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -49,6 +80,7 @@ def write_progress(ga: NeuroGA, out: Path, started: float, gens_this_session: in
     out.mkdir(parents=True, exist_ok=True)
     h = ga.history
     has_png = _chart(h, out / "fitness.png")
+    write_history_files(h, out)
     ga._store(ga.champion, out, "champion", True)
     hof_lines = ["# Hall of fame", "",
                  "Cells: radar-off share (r0 < 1/3, r1 < 2/3, r2) x launch range / Rmax "
@@ -95,14 +127,35 @@ def write_progress(ga: NeuroGA, out: Path, started: float, gens_this_session: in
              f"shots {cs['shots']:.1f}, hit rate {cs['hit_rate']:.2f}",
              f"- hall of fame cells: {', '.join(sorted(ga.hof)) or 'none'}",
              f"- chart: {'fitness.png' if has_png else 'not written (pip install .[plot])'}",
+             "- full per-generation history: `history.csv` / `history.json` (best, mean, median, "
+             "moving average, sigma, immigration / stagnation events, champion decisions)",
              "- replay the champion: `python -m stealth_tactics replay-champion "
              f"{out}`", "",
              "## Champion missile outcomes (benchmark fights)", ""]
     lines += _out_table("Red as target (Blue shots)", outcomes.get("red_as_target") or {})
     lines += _out_table("Blue as target (Red shots)", outcomes.get("blue_as_target") or {})
-    lines += ["| gen | best | mean | champion benchmark |", "|---|---|---|---|"]
+    ev = [e for e in ga.events if e.get("type") in ("stagnation", "immigration", "champion")]
+    lines += ["## Recent events (stagnation, immigration, champion decisions)", ""]
+    lines += [f"- gen {e['gen']}: {e['text']}" for e in ev[-15:]] or ["_none_"]
+    lines += [""]
+
+    def _f(v, fmt="{:.1f}"):
+        return "" if v is None else fmt.format(v)
+
+    def _dec(r):
+        d = r.get("champion_decision") or {}
+        if d.get("challenger_id") is None:
+            return ""
+        s_ = f"{d['challenger_id']} {_f(d.get('challenger_bench'))}"
+        if d.get("mean_diff") is not None:
+            s_ += f" (d {d['mean_diff']:.1f}, k*SE {d['margin']:.1f})"
+        return s_ + (" accepted" if d.get("accepted") else " kept champion")
+    lines += ["| gen | best | mean | median | best MA | mean sigma | champion benchmark | "
+              "challenger | immigrants |", "|---|---|---|---|---|---|---|---|---|"]
     lines += [f"| {r['generation']} | {r['best_fitness']:.1f} | {r['mean_fitness']:.1f} | "
-              f"{r['champion_bench']:.1f} |" for r in h[-30:]]
+              f"{_f(r.get('median_fitness'))} | {_f(r.get('best_ma'))} | "
+              f"{r['mean_sigma']:.4f} | {r['champion_bench']:.1f} | {_dec(r)} | "
+              f"{r.get('immigrants') or ''} {r.get('immigrant_reason') or ''} |" for r in h[-30:]]
     (out / "progress.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

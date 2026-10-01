@@ -228,7 +228,12 @@ scripts/overnight.sh -o runs/overnight
 **Where outputs go** (every 10 generations, in `runs/overnight/progress/`):
 - `progress.md` (generations, seconds per generation, champion kills and
   losses, the last 30 generations);
-- `fitness.png` (best and mean per generation, and the champion's benchmark);
+- `fitness.png` (best, mean, median and moving average per generation, the
+  champion's benchmark, immigration / stagnation / champion-change markers,
+  and a mutation-sigma panel);
+- `history.csv` / `history.json` (every generation: best, mean, median,
+  moving average, sigma, immigration and stagnation events, champion
+  decisions; the run directory has the same files, updated every generation);
 - `champion_best.txt.acmi` and `champion_worst.txt.acmi` (open in TacView);
 - `champion.json` with `champion_weights.npz`;
 - `hall_of_fame.md` and `hall_of_fame/<cell>/`, one replayable champion per
@@ -240,13 +245,21 @@ scripts/overnight.sh -o runs/overnight
 |---|---|---|
 | `--n-red` | 6 | Red flight size (6 or 8); a kill is worth 100 × 6 / n_red |
 | `--pop` | 50 | networks per generation |
-| `--presentations` | 24 | fights per network per generation |
+| `--presentations` | 36 | fights per network per generation (24 before spec 6b) |
 | `--seed` | 2026 | master seed (a different seed gives a different run) |
 | `--init` | random | start: `random` (50 random), `mixed` (10 clones of the hand policy + 40 random), `clone` |
 | `--blue-start` | wall | `wall` (4 jets line abreast, 30 NM wide) or `diamond` (old spec 4 start) |
 | `--fitness` | `scenarios/fitness.yaml` | fitness weights file (edit it or copy it) |
 | `--fw KEY=VALUE` | | override one weight, e.g. `--fw blue_loss=-200` |
 | `--workers` | all cores | worker processes |
+| `--immigrate-every` | 25 | every N generations, newcomers replace offspring (0 = off) |
+| `--immigrants` | 8 | newcomers per periodic immigration (never elites) |
+| `--immigrant-random-frac` | 0.5 | share of random nets; the rest are mutated hall-of-fame cells outside the champion's lineage |
+| `--stagnation-gens` | 60 | generations without a new high of the moving average of the best score before a stagnation immigration (0 = off) |
+| `--stagnation-window` | 10 | moving-average window (generations) |
+| `--stagnation-immigrants` | 16 | newcomers when the stagnation trigger fires |
+| `--top-n` | 3 | networks (top by eval fitness) benchmarked every generation |
+| `--champion-k` | 1 | a challenger must beat the champion by more than k standard errors of the paired benchmark difference (0 = higher score wins) |
 | `--every` | 10 | progress outputs every N generations |
 | `--gens` | until stopped | stop after this many generations in total |
 | `-o` | `runs/overnight` | output directory; use a new one when you change any knob |
@@ -272,8 +285,8 @@ penalty −300, network fitness = mean − 0.2 × std).
 ```bash
 # Behaviour-clone HandBlue into the 231-64-64-13 network (gate: >= 80 % of its kills)
 python -m stealth_tactics clone-hand -o runs/clone
-# Evolve the network: 50 x 24 presentations, mixed start (default is all random), novelty on
-python -m stealth_tactics evolve-net --pop 50 --presentations 24 --gens 10 \
+# Evolve the network: 50 x 36 presentations, mixed start (default is all random), novelty on
+python -m stealth_tactics evolve-net --pop 50 --presentations 36 --gens 10 \
     --init mixed --clone runs/clone/clone.npz -o runs/net
 # Continue from the last checkpoint up to generation 20 in total (byte-identical)
 python -m stealth_tactics evolve-net --gens 20 --resume -o runs/net
@@ -284,11 +297,14 @@ python -m stealth_tactics replay-champion runs/net
 A run directory holds `checkpoints/` (the last 3), `champion.json`,
 `champion_weights.npz/.json`, `champion_best.txt.acmi`,
 `champion_worst.txt.acmi`, `hall_of_fame/<cell>/`, `report.json` (history,
-benchmark, held-out test, champion lineage) and `timing.jsonl`. Genomes carry
+benchmark, held-out test, champion lineage), `history.csv` / `history.json`
+(spec 6b, written every generation) and `timing.jsonl`. Genomes carry
 `n_networks` (1 today; per-element / per-jet networks are deferred) and an
 interface fingerprint, so an incompatible file is refused, not misread.
 Fitness is v1.1 (spec 7, `scenarios/fitness.yaml`). See
-`docs/specs/06-neural-policy-neuroevolution.md` and `docs/specs/07-fitness.md`.
+`docs/specs/06-neural-policy-neuroevolution.md`, `docs/specs/06b-ga-stability.md`
+(immigration, moving-average stagnation trigger, fair champion pick) and
+`docs/specs/07-fitness.md`.
 
 ## Tests
 

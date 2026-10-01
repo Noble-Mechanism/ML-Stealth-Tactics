@@ -299,22 +299,38 @@ The genome GA (`ga/`) is untouched and stays the scripted baseline.
   (`jet_network = (0,0,0,0)`). Loaders refuse any count other than 1 and any
   interface mismatch with a clear message (per-element / per-jet nets are
   deferred). Files: deterministic `.npz` (fixed zip timestamps) + `.json`.
-- **Evolution** (`neuro/neuroga.py`): mutation-only GA. Pop 50 × 24
-  presentations (spec 4 `build_eval_set`, resampled each generation);
+- **Evolution** (`neuro/neuroga.py`): mutation-only GA. Pop 50 × 36
+  presentations (24 before spec 6b) (spec 4 `build_eval_set`, resampled each generation);
   2 elites by fitness (re-scored); parents = top 10 by
   rank(fitness) + 0.5 · rank(novelty); self-adaptive σ
   (σ' = clip(σ·exp(0.2·N(0,1)), 0.002, 0.2), start 0.02); no crossover
-  (whole-unit swap behind `--unit-swap`, off). Stagnation: 25 generations with
-  no champion improvement boosts the novelty weight to 1.0 for 10 generations
-  and doubles σ. Initial population: 10 perturbed clones of `HandBlue` + 40
-  random (`--init mixed|random|clone`).
+  (whole-unit swap behind `--unit-swap`, off). Initial population: all random
+  by default (`--init mixed|random|clone`; mixed = 10 perturbed clones of
+  `HandBlue` + 40 random).
+- **GA stability (spec 6b, `docs/specs/06b-ga-stability.md`):** no global
+  boost any more (the spec 6 rule, 25 generations without a champion
+  improvement → novelty weight 1.0 for 10 generations and σ × 2 for everyone,
+  crashed the population mean in Rusty's overnight run; it is still available
+  through the config). Instead: *periodic immigration* (every 25 generations
+  the next generation gets 8 newcomers in place of offspring: half random
+  nets, half mutated hall-of-fame cells outside the champion's lineage; one
+  of the 10 parent slots is reserved for recent immigrant lineages for 10
+  generations), and a *stagnation trigger* on the 10-generation moving
+  average of the best eval score (60 generations without a new high) that
+  answers with a larger immigration (16). Elites, σ and the novelty weight of
+  everyone else are untouched.
 - **Novelty** (`neuro/novelty.py`): 8 behaviour measures (radar-off share,
   launch r/Rmax, shots, closest approach, altitude, away share, spread, first
   shot time), measured on truth by a recorder wrapper (a descriptor only,
   never a policy input); kNN (k = 10) over population + archive (2 random
   members added per generation, cap 1,000).
-- **Champion / hall of fame:** top-1 on the 64-presentation benchmark each
-  generation, top-3 every 5th; champion = best benchmark score. Hall of fame
+- **Champion / hall of fame:** top-3 by eval fitness on the 64-presentation
+  benchmark every generation (spec 6b; was top-1, top-3 every 5th). A
+  challenger replaces the champion only if it beats it on the same (paired)
+  benchmark fights by more than 1 standard error of the per-fight difference
+  and has the higher benchmark score; stored scores of the incumbent and of
+  returning elites are reused, so usually only 1-2 new networks are
+  benchmarked. Decisions are logged (history, events). Hall of fame
   3 × 3 over radar-off share (1/3, 2/3) × launch r/Rmax (0.6, 0.85); networks
   that never fired have no cell. At the end: the champion is re-checked
   exactly on its stored presentations and the benchmark, and the top 5 +
@@ -327,6 +343,9 @@ The genome GA (`ga/`) is untouched and stays the scripted baseline.
   workers give byte-identical results. Checkpoints (last 3 kept) hold the
   population, σ, lineage, archive, champion, hall of fame and history; resume
   is byte-identical and refuses a changed config or interface hash.
+  `history.csv` / `history.json` (run directory, every generation, and the
+  overnight `progress/` folder) hold best / mean / median / moving average,
+  σ, immigration and stagnation events and champion decisions.
 - **Fitness:** spec 7 v1 (`stealth_tactics/fitness.py`, weights in
   `scenarios/fitness.yaml`, part of the config hash): kill 100 × 6 / n_red,
   loss −150 (−250 if egressing: heading > 120° off the nearest Red), +10 per

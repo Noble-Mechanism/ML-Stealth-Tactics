@@ -39,7 +39,7 @@ def check_network_count(n: int) -> None:
 class NetGenome:
     nets: List[np.ndarray]                 # one weight vector per network
     sigma: float = SIGMA_INIT
-    lineage: dict = field(default_factory=dict)   # id, parent, born, origin
+    lineage: dict = field(default_factory=dict)   # id, parent, born, origin, root[, immig]
 
     @property
     def n_networks(self) -> int:
@@ -69,6 +69,11 @@ def mutate(parent: NetGenome, rng: np.random.Generator, child_id: int, gen: int,
     nets = [w + s * rng.standard_normal(w.shape) for w in parent.nets]
     lin = {"id": int(child_id), "parent": parent.lineage.get("id"), "born": int(gen),
            "origin": parent.lineage.get("origin", "random")}
+    # Spec 6b: founder id (lineage root) and immigration generation are inherited
+    if "root" in parent.lineage or "id" in parent.lineage:
+        lin["root"] = parent.lineage.get("root", parent.lineage.get("id"))
+    if "immig" in parent.lineage:
+        lin["immig"] = parent.lineage["immig"]
     return NetGenome(nets, s, lin)
 
 
