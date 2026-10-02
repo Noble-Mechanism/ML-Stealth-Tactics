@@ -50,6 +50,13 @@ def add_run_args(p: argparse.ArgumentParser, gens_default) -> None:
                    default=d["immigrant_random_frac"].default,
                    help="share of random nets among immigrants; the rest are mutated "
                         "hall-of-fame cells outside the champion's lineage (default 0.5)")
+    g.add_argument("--immigrant-protect-gens", type=int,
+                   default=d["immigrant_protect_gens"].default,
+                   help="generations a newcomer lineage keeps its reserved parent slots "
+                        "(default 25)")
+    g.add_argument("--immigrant-parent-slots", type=int,
+                   default=d["immigrant_parent_slots"].default,
+                   help="truncation-parent slots reserved for newcomer lineages (default 2)")
     g.add_argument("--champion-k", type=float, default=d["champion_margin_k"].default,
                    help="a challenger must beat the champion by more than k standard errors "
                         "of the paired benchmark difference (default 1; 0 = higher score wins)")
@@ -72,6 +79,8 @@ def config_from_args(args) -> NeuroConfig:
                        stagnation_immigrants=args.stagnation_immigrants,
                        immigrate_every=args.immigrate_every, immigrants=args.immigrants,
                        immigrant_random_frac=args.immigrant_random_frac,
+                       immigrant_protect_gens=args.immigrant_protect_gens,
+                       immigrant_parent_slots=args.immigrant_parent_slots,
                        champion_margin_k=args.champion_k, top_n=args.top_n)
 
 

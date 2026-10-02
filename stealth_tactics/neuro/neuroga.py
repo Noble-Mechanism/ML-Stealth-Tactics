@@ -76,9 +76,11 @@ class NeuroConfig:
     # next generation gets ``immigrants`` newcomers in place of offspring
     immigrate_every: int = 25
     immigrants: int = 8
-    immigrant_random_frac: float = 0.5   # rest: mutated non-champion-lineage HoF cells
-    immigrant_protect_gens: int = 10     # immigrant lineages are protected this long
-    immigrant_parent_slots: int = 1      # truncation-parent slots reserved for them
+    immigrant_random_frac: float = 0.5   # rest: mutated hall-of-fame cells (not the champion's)
+    immigrant_max_per_cell: int = 2      # newcomer fix: at most this many per cell per immigration
+    immigrant_hof_lineage: str = "prefer_other"   # prefer_other | strict (spec 6b root rule)
+    immigrant_protect_gens: int = 25     # newcomer fix (was 10): protection length
+    immigrant_parent_slots: int = 2      # newcomer fix (was 1): parent slots reserved for them
     sigma_init: float = 0.02
     tau: float = 0.2
     sigma_min: float = 0.002
@@ -140,6 +142,10 @@ class NeuroConfig:
             raise ValueError("immigrant_random_frac must be in [0, 1]")
         if self.immigrant_parent_slots > self.truncation:
             raise ValueError("immigrant_parent_slots larger than truncation")
+        if self.immigrant_max_per_cell < 1:
+            raise ValueError("immigrant_max_per_cell must be >= 1")
+        if self.immigrant_hof_lineage not in ("prefer_other", "strict"):
+            raise ValueError("immigrant_hof_lineage must be prefer_other or strict")
 
     def max_immigrants(self) -> int:
         """Immigrants never take elite slots and leave at least one offspring."""
@@ -424,24 +430,44 @@ class NeuroGA:
             self.stagnation = 0           # the all-time MA high stays the reference
         return ma, fired
 
-    def _make_immigrants(self, n: int, g: int) -> Tuple[List[NetGenome], dict]:
-        """n newcomers for generation g+1: round(n * immigrant_random_frac)
-        random nets (fresh lineage roots), the rest mutated descendants of
-        hall-of-fame cells whose lineage root differs from the champion's
-        (best benchmark first, cycling); random when no such cell exists."""
-        c = self.cfg
+    def immigrant_cells(self) -> List[str]:
+        """Hall-of-fame cells newcomers may descend from, in draw order.
+
+        Never the champion's own genome or its behaviour cell. Cells whose
+        lineage root (founder) differs from the champion's come first (best
+        benchmark first); with ``immigrant_hof_lineage="prefer_other"`` the
+        other filled cells follow (in a run that collapsed to one founder, as
+        Rusty's 6b run did, only one cell had another root, so all hall-of-fame
+        newcomers were copies of it); ``"strict"`` = the spec 6b root rule."""
         ch = self.champion
-        ch_root = ch_id = None
+        ch_root = ch_id = ch_cell = None
         if ch is not None:
             ch_id = ch["genome"].lineage.get("id")
             ch_root = ch["genome"].lineage.get("root", ch_id)
-        cells = [cell for cell in sorted(self.hof, key=lambda x: (-self.hof[x]["benchmark_fitness"], x))
-                 if self.hof[cell]["genome"].lineage.get("id") != ch_id
-                 and self.hof[cell]["genome"].lineage.get(
-                     "root", self.hof[cell]["genome"].lineage.get("id")) != ch_root]
+            ch_cell = hof_cell(ch.get("bench_raw") or {}) if ch.get("bench_raw") else None
+        order = sorted(self.hof, key=lambda x: (-self.hof[x]["benchmark_fitness"], x))
+        other, same = [], []
+        for cell in order:
+            lin = self.hof[cell]["genome"].lineage
+            if lin.get("id") == ch_id:
+                continue
+            if lin.get("root", lin.get("id")) != ch_root:
+                other.append(cell)
+            elif cell != ch_cell:
+                same.append(cell)
+        return other + (same if self.cfg.immigrant_hof_lineage == "prefer_other" else [])
+
+    def _make_immigrants(self, n: int, g: int) -> Tuple[List[NetGenome], dict]:
+        """n newcomers for generation g+1: round(n * immigrant_random_frac)
+        random nets (fresh lineage roots); the rest are mutated descendants of
+        hall-of-fame cells (``immigrant_cells``), round-robin over distinct
+        cells with at most ``immigrant_max_per_cell`` per cell; slots left
+        over (too few cells) are random."""
+        c = self.cfg
+        cells = self.immigrant_cells()
         n_rand = int(round(n * c.immigrant_random_frac))
-        if not cells:
-            n_rand = n
+        n_hof = min(n - n_rand, len(cells) * c.immigrant_max_per_cell)
+        n_rand = n - n_hof
         out, src = [], {"random": 0, "hof": 0, "hof_cells": []}
         for i in range(n):
             r = _rng(c.master_seed, g, P_IMMIG, i)

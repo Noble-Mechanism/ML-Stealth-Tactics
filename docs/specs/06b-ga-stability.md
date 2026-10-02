@@ -77,13 +77,17 @@ more eval fights per generation (see Timing).
     `hof_cell` in its lineage.
   - If no cell is eligible (common late in a run that collapsed to one
     lineage), all immigrants are random.
+  - **Since 2026-10-02 (newcomer fixes): see the update at the end.** Cells
+    are now drawn round-robin over distinct cells, at most 2 per cell, with
+    other-founder cells first and then the other filled cells.
 - Protection: random immigrants score far below a tuned population (around
   −300 vs −50), so plain truncation would discard them at once.
   - Members whose lineage has an `immig` mark (inherited by descendants) from
-    the last `immigrant_protect_gens` (default 10) generations are protected.
-  - `immigrant_parent_slots` (default 1) of the 10 truncation-parent slots go
-    to the best protected members by combined rank, so newcomer lineages
-    produce about 10 % of the offspring for 10 generations.
+    the last `immigrant_protect_gens` (default 10; **25 since 2026-10-02**)
+    generations are protected.
+  - `immigrant_parent_slots` (default 1; **2 since 2026-10-02**) of the 10
+    truncation-parent slots go to the best protected members by combined
+    rank, so newcomer lineages produce about 10 % (now 20 %) of the offspring.
   - A protected member that ranks in the top 10 on merit takes that slot; no
     extra slot is added.
 - Interaction with the stagnation trigger:
@@ -174,8 +178,10 @@ the recent events and a 30-generation table with median, moving average,
 | immigrate_every | `--immigrate-every` | 25 | periodic immigration (0 = off) |
 | immigrants | `--immigrants` | 8 | immigrants per periodic immigration |
 | immigrant_random_frac | `--immigrant-random-frac` | 0.5 | random share; rest from hall-of-fame cells outside the champion's lineage |
-| immigrant_protect_gens | | 10 | protection window for immigrant lineages |
-| immigrant_parent_slots | | 1 | parent slots reserved for protected members |
+| immigrant_max_per_cell | | 2 | at most this many newcomers per hall-of-fame cell per immigration |
+| immigrant_hof_lineage | | prefer_other | `strict` = only cells with another founder (6b rule) |
+| immigrant_protect_gens | `--immigrant-protect-gens` | 25 (was 10) | protection window for immigrant lineages |
+| immigrant_parent_slots | `--immigrant-parent-slots` | 2 (was 1) | parent slots reserved for protected members |
 | top_every / top_n | `--top-n` | 1 / 3 | benchmark the top n every `top_every` generations |
 | champion_margin_k | `--champion-k` | 1.0 | k in mean(d) > k·SE (≤ 0: higher score wins) |
 | bench_cache | | true | reuse stored benchmark scores of unchanged genomes |
@@ -236,3 +242,34 @@ fresh all-random population (generations 0 and 1), with nothing else running.
   with 1 and 4 workers.
 - Spec 6 tests: the old boost is tested through the legacy config; the
   selection test runs with the cache off (it counts benchmark calls).
+
+## Update 2026-10-02: newcomer fixes (approved by Rusty with fitness v2)
+
+Rusty's 6b overnight run (190 generations) showed two problems:
+- All 4 hall-of-fame newcomers were copies of the same cell (r0_l2) at every
+  immigration. It was the only cell whose founder differed from the
+  champion's; the population had collapsed to one founder.
+- Newcomer lineages fell from 8-9 members to 2-7 within 10 generations, and
+  none ever produced the best network.
+
+Changes (all in `NeuroConfig`):
+- **Distinct cells** (`immigrant_cells`):
+  - Cells holding the champion's genome, and the champion's own behaviour
+    cell, are excluded.
+  - Draw order: cells with another founder first (best benchmark first),
+    then (`immigrant_hof_lineage="prefer_other"`, the default) the other
+    filled cells.
+  - Round-robin, with at most `immigrant_max_per_cell` = 2 newcomers per cell
+    per immigration. Slots left over are random nets.
+  - `"strict"` keeps the 6b founder rule, with the per-cell cap.
+- **Longer protection:** `immigrant_protect_gens` 10 → **25**, which equals
+  the immigration period. `immigrant_parent_slots` 1 → **2**, so newcomer
+  lineages can breed for a whole period and produce about 20 % of the
+  offspring meanwhile.
+- New CLI flags: `--immigrant-protect-gens`, `--immigrant-parent-slots`.
+
+Tests (`tests/test_neuro_spec6b.py`):
+- New defaults.
+- Cell order, distinctness, the cap of 2 per cell and the random remainder.
+- The strict rule.
+- 25-generation protection and 2 reserved parent slots.

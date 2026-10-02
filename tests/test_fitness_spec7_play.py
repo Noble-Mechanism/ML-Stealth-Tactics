@@ -1,5 +1,7 @@
-"""Spec 7 fitness v1 terms + aggregation, and the play package (wall start,
-random default, fitness weights in the config hash, overnight auto-resume)."""
+"""Spec 7 fitness terms (v1 terms with the v2 additions switched off, and the
+v2 Red-alive penalty / participation-gated survival bonus) + aggregation, and
+the play package (wall start, random default, fitness weights in the config
+hash, overnight auto-resume)."""
 
 import math
 from types import SimpleNamespace
@@ -10,15 +12,21 @@ import pytest
 from stealth_tactics.fitness import (DEFAULT_WEIGHTS, aggregate, fight_terms, load_weights,
                                      parse_overrides)
 
-W = dict(DEFAULT_WEIGHTS)
+W2 = dict(DEFAULT_WEIGHTS)                                       # fitness v2
+W = {**W2, "red_alive": 0.0, "escape_min_shots": 0}             # v1 terms
 BLUE = ["B1", "B2", "B3", "B4"]
 
 
-def res(kills=0, losses=(), alive=None, shots=0, end="blue_dead", events=()):
+def res(kills=0, losses=(), alive=None, shots=0, end="blue_dead", events=(), shooters=None,
+        red_alive=None, n_red=6):
+    """Fake SimResult. Blue shots go to ``shooters`` (default: B1, B2, ... in turn)."""
     ev = [{"type": "kill", "target": b} for b in losses] + list(events)
+    who = list(shooters) if shooters is not None else [BLUE[i % 4] for i in range(shots)]
     return SimpleNamespace(blue_kills=kills, red_kills=len(losses),
                            blue_alive=4 - len(losses) if alive is None else alive,
-                           blue_shots=shots, end_reason=end, events=ev)
+                           blue_shots=len(who), end_reason=end, events=ev,
+                           red_alive=n_red - kills if red_alive is None else red_alive,
+                           shots=[{"coalition": "Blue", "shooter": b} for b in who])
 
 
 def eg(*ids):
@@ -175,3 +183,76 @@ def test_overnight_progress_outputs_and_auto_resume(tmp_path):
     from stealth_tactics.neuro.neuroga import replay_network_champion
     ok, msg = replay_network_champion(prog, workers=4)
     assert ok, msg
+
+
+# ------------------------------------------------------------ fitness v2 ---
+def test_v2_defaults_in_yaml_and_builtin():
+    w = load_weights()
+    assert w["red_alive"] == -40.0 and w["red_alive_counts_departed"] is False
+    assert w["escape_min_shots"] == 1
+    assert DEFAULT_WEIGHTS["red_alive"] == -40.0 and DEFAULT_WEIGHTS["escape_min_shots"] == 1
+
+
+def test_v2_red_alive_penalty_counts():
+    t = fight_terms(res(kills=2, shots=3, end="time_cap"), 6, eg(), W2)
+    assert t["n_red_present"] == 4 and t["red_alive"] == -160.0
+    assert fight_terms(res(kills=6, shots=6, end="red_dead"), 6, eg(), W2)["red_alive"] == 0.0
+    t8 = fight_terms(res(kills=3, shots=3, n_red=8, end="time_cap"), 8, eg(), W2)
+    assert t8["n_red_present"] == 5 and t8["red_alive"] == -200.0
+    assert fight_terms(res(kills=2, shots=3), 6, eg(), {**W2, "red_alive": -10})["red_alive"] == -40.0
+
+
+def test_v2_departed_red_not_alive_and_keeps_departure_bonus():
+    evs = [{"type": "depart", "observer": "R1", "text": "DEPART (Winchester)"},
+           {"type": "depart", "observer": "R2", "text": "DEPART (Winchester)"},
+           {"type": "depart", "observer": "R3", "text": "DEPART (Winchester)"},
+           {"type": "kill", "target": "R3"}]           # departed, then killed: a kill
+    t = fight_terms(res(kills=1, shots=2, events=evs, end="time_cap"), 6, eg(), W2)
+    # 5 alive (6 - 1 kill), 2 of them departed -> 3 still in the fight
+    assert t["n_red_present"] == 3 and t["red_alive"] == -120.0
+    assert t["n_red_departs"] == 2 and t["red_winchester_departs"] == 50.0
+    t2 = fight_terms(res(kills=1, shots=2, events=evs, end="time_cap"), 6, eg(),
+                     {**W2, "red_alive_counts_departed": True})
+    assert t2["n_red_present"] == 5 and t2["red_alive"] == -200.0
+
+
+def test_v2_survival_bonus_needs_a_shot():
+    # 4 alive at the cap; only B1 fired -> +10 once
+    t = fight_terms(res(kills=1, shooters=["B1"], end="time_cap"), 6, eg(), W2)
+    assert t["escape"] == 10.0 and t["n_escaped"] == 1 and t["n_alive_no_bonus"] == 3
+    # B1 fired twice, B2 once, B3 dead after firing: B1 + B2 earn it
+    t = fight_terms(res(kills=1, losses=["B3"], shooters=["B1", "B1", "B2", "B3"],
+                        end="time_cap"), 6, eg(), W2)
+    assert t["escape"] == 20.0
+    # min shots 2: only B1
+    t = fight_terms(res(kills=1, shooters=["B1", "B1", "B2"], end="time_cap"), 6, eg(),
+                    {**W2, "escape_min_shots": 2})
+    assert t["escape"] == 10.0
+    # not at the time cap: nothing; v1 (min 0): every live jet
+    assert fight_terms(res(kills=1, shooters=["B1"], end="red_dead"), 6, eg(), W2)["escape"] == 0.0
+    assert fight_terms(res(kills=1, shooters=["B1"], end="time_cap"), 6, eg(),
+                       {**W2, "escape_min_shots": 0})["escape"] == 40.0
+
+
+def test_v2_no_engagement_adds_red_alive():
+    t = fight_terms(res(end="time_cap"), 6, eg(), W2)
+    assert t["total"] == -300.0 - 240.0 and t["red_alive"] == -240.0 and t["escape"] == 0.0
+    # never fighting stays worse than a failed fight (1 shot, 1 loss, no kill)
+    failed = fight_terms(res(losses=["B1"], shooters=["B1"], end="time_cap"), 6, eg(), W2)
+    assert failed["total"] == -150.0 - 2.0 - 240.0 > t["total"]
+
+
+def test_v2_lamb_profile_scores_below_shared_fight():
+    """Sacrificial lamb (B1 shoots 4, dies; 3 runners never fire; 1.5 kills,
+    1 loss) vs a shared fight (all four fire twice; 2 kills, 1.5 losses),
+    synthetic. v1: lamb 22 vs shared -16; v2: lamb -188 vs shared -176."""
+    def lamb(w):
+        return np.mean([fight_terms(res(kills=k, losses=["B1"], shooters=["B1"] * 4,
+                                        end="time_cap"), 6, eg(), w)["total"] for k in (1, 2)])
+
+    def shared(w):
+        return np.mean([fight_terms(res(kills=k, losses=["B1", "B2"][:l], shooters=BLUE * 2,
+                                        end="time_cap"), 6, eg(), w)["total"]
+                        for k, l in ((2, 1), (2, 2))])
+    assert lamb(W) > shared(W)          # v1 pays the lamb
+    assert shared(W2) > lamb(W2)        # v2 does not

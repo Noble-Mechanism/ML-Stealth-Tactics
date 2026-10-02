@@ -151,7 +151,8 @@ def _fake_hof_entry(gid, root, bench, w):
 
 
 def test_immigration_count_sources_and_offspring_unchanged(tmp_path):
-    kw = dict(immigrants=6, immigrant_random_frac=0.5, stagnation_gens=0)
+    kw = dict(immigrants=6, immigrant_random_frac=0.5, stagnation_gens=0,
+              immigrant_hof_lineage="strict", immigrant_parent_slots=1)
     a = _ga(tmp_path / "a", immigrate_every=3, **kw)
     b = _ga(tmp_path / "b", immigrate_every=0, **kw)
     for ga in (a, b):
@@ -205,7 +206,7 @@ def test_immigration_falls_back_to_random_without_eligible_hof(tmp_path):
     ga = _ga(tmp_path, immigrate_every=2, immigrants=4, stagnation_gens=0)
     ga.init_population()
     ga.step()
-    ga.hof = {}
+    ga.immigrant_cells = lambda: []          # no eligible hall-of-fame cell
     row = ga.step()
     assert row["immigrants"] == 4 and row["immigrant_sources"]["random"] == 4
     assert sum(p.lineage.get("origin") == "immigrant_random" for p in ga.population) == 4
@@ -340,3 +341,67 @@ def test_sim_immigration_and_top3_identical_across_workers(tmp_path):
             (tmp_path / "b/checkpoints" / f"ckpt_g0003{e}").read_bytes()
     h = json.loads((tmp_path / "a" / "history.json").read_text())
     assert h[1]["immigrants"] == 1
+
+
+# ------------------------------------------------- newcomer fixes (v2) ----
+def test_newcomer_defaults():
+    c = NeuroConfig()
+    assert (c.immigrant_protect_gens, c.immigrant_parent_slots) == (25, 2)
+    assert (c.immigrant_max_per_cell, c.immigrant_hof_lineage) == (2, "prefer_other")
+
+
+def _cells_ga(tmp_path, **kw):
+    ga = _ga(tmp_path, immigrate_every=0, stagnation_gens=0, **kw)
+    ga.init_population()
+    ga.step()
+    ch = ga.champion["genome"].lineage
+    root = ch.get("root", ch["id"])
+    w = ga.population[0].weights
+    ch_cell = hof_cell(ga.champion["bench_raw"])
+    ga.hof = {"c_champ_genome": {**ga.champion},
+              "o1": _fake_hof_entry(9101, 9101, 50.0, w + 0.5),
+              "s1": _fake_hof_entry(9201, root, 90.0, w + 1.0),
+              "s2": _fake_hof_entry(9202, root, 80.0, w + 1.5),
+              "s3": _fake_hof_entry(9203, root, 70.0, w + 2.0)}
+    if ch_cell:
+        ga.hof[ch_cell] = _fake_hof_entry(9301, root, 99.0, w - 1.0)
+    return ga, ch_cell
+
+
+def test_immigrant_cells_distinct_capped_and_ordered(tmp_path):
+    ga, ch_cell = _cells_ga(tmp_path, immigrants=8, immigrant_random_frac=0.0)
+    cells = ga.immigrant_cells()
+    # other-founder cells first, then same-founder cells by benchmark; never the
+    # champion's genome or the champion's own behaviour cell
+    assert cells[0] == "o1" and cells[1:] == ["s1", "s2", "s3"]
+    assert "c_champ_genome" not in cells and ch_cell not in cells
+    imm, src = ga._make_immigrants(8, ga.gen)
+    from collections import Counter
+    cnt = Counter(src["hof_cells"])
+    assert src["hof"] == 8 and len(cnt) == 4 and max(cnt.values()) <= 2
+    assert all(p.lineage["origin"] == "immigrant_hof" for p in imm)
+    # more slots than cells x 2 -> the rest are random
+    imm, src = ga._make_immigrants(12, ga.gen)
+    assert src["hof"] == 8 and src["random"] == 4
+    # strict = the spec 6b founder rule: only o1, at most 2 newcomers from it
+    ga.cfg.immigrant_hof_lineage = "strict"
+    assert ga.immigrant_cells() == ["o1"]
+    imm, src = ga._make_immigrants(8, ga.gen)
+    assert src["hof"] == 2 and src["random"] == 6 and set(src["hof_cells"]) == {"o1"}
+
+
+def test_immigrant_protection_length_and_parent_slots(tmp_path):
+    ga = _ga(tmp_path, immigrate_every=0, stagnation_gens=0)
+    g0 = NetGenome([np.zeros(3)], 0.01, {"id": 1, "immig": 10})
+    assert ga._protected(g0, 34) and not ga._protected(g0, 35)     # 25 generations
+    ga.init_population()
+    for i, p in enumerate(ga.population):
+        if i in (17, 18, 19):
+            p.lineage["immig"] = 0
+    comb = np.arange(20, dtype=float)          # member i has combined rank i
+    par = ga._select_parents(comb, 5)
+    # two reserved slots go to the best protected members (17, 18); 3 by merit
+    assert sorted(par) == [0, 1, 2, 17, 18]
+    ga.cfg.immigrant_parent_slots = 1
+    assert sorted(ga._select_parents(comb, 5)) == [0, 1, 2, 3, 17]
+    assert sorted(ga._select_parents(comb, 30)) == [0, 1, 2, 3, 4]  # protection over

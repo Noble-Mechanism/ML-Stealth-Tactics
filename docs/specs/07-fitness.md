@@ -1,6 +1,8 @@
-# Spec 7 — Fitness v1 (compact)
+# Spec 7 — Fitness v2 (compact)
 
-Status: **approved by Rusty (2026-09-26) and implemented.** It replaces the
+Status: **v1 approved by Rusty (2026-09-26) and implemented; v2 (Red-alive
+penalty, participation-gated survival bonus) approved 2026-10-02 and
+implemented** (section "Fitness v2" at the end). It replaces the
 placeholder fitness for the neural pipeline (`evolve-net`, `overnight`,
 `clone-hand`'s scores). The genome GA (`evolve`) keeps its own `GAConfig`
 fitness. Code: `stealth_tactics/fitness.py`. Weights:
@@ -25,10 +27,11 @@ fitness. Code: `stealth_tactics/fitness.py`. Weights:
 | 1 | each Red kill | 100 × (6 / n_red) | `kill`, `kill_ref_red` |
 | 2 | each Blue loss | −150 | `blue_loss` |
 | 3 | each Blue loss while egressing (instead of 2) | −250 | `blue_loss_egress`, `egress_off_deg` |
-| 4 | each Blue jet alive at the 360 s cap ("escaped", placeholder rule) | +10 | `escape`, `escape_only_at_time_cap` |
+| 4 | each Blue jet alive at the 360 s cap that fired ≥ 1 missile (v2 gate) | +10 | `escape`, `escape_only_at_time_cap`, `escape_min_shots` (v2, 1) |
 | 5 | each Red jet that left the fight out of missiles and was not killed (a quarter kill) | +25 | `red_winchester_depart` |
 | 6 | each Blue missile fired | −2 | `shot` |
 | 6b | a fight with no Blue shots and no kills (v1.1 fix) | −300 | `no_engagement` |
+| 6c | each Red jet still alive and not departed at the end of the fight (v2) | −40 | `red_alive`, `red_alive_counts_departed` (false) |
 | 7 | network fitness = mean over its presentations − 0.2 × std (v1.1; was 0.5) | 0.2 | `std_coef` |
 
 Definitions:
@@ -46,7 +49,8 @@ Definitions:
   that departs and is then killed scores the kill only.
 - **No engagement:** a fight with no Blue shots and no kills scores the loss
   terms plus the **−300 no-engagement penalty** (v1.1). It gets no escape and
-  no Red-departure credit (`no_engagement_loss_only`).
+  no Red-departure credit (`no_engagement_loss_only`). Since v2 it also gets
+  the Red-alive penalty (a penalty, not a credit).
 - **Aggregation:** population std (ddof 0) over the network's presentations
   in that generation. The benchmark and held-out test use the same formula.
 - Novelty behaviour measures are unchanged (spec 6 L).
@@ -104,3 +108,59 @@ the best fighter (−22) and above the hand policy (−194).
 
 The hand policy's per-fight results were not saved (only its averages), so
 its v1.1 score is not recomputed here.
+
+## Fitness v2 (approved by Rusty 2026-10-02)
+
+**Why: the sacrificial lamb.** Rusty's 6b overnight run (190 generations on
+2f00bda) improved through kills (1.3 → 2.35 per fight) while Blue losses
+stayed flat at about 1.05-1.1 per fight. A re-fly of the earlier run's
+champion on the 64-fight benchmark (current physics) shows the tactic:
+- In 48 of 64 fights exactly one jet dies. In all 48 it is the jet that
+  advanced furthest (21 NM toward Red). It takes 90 % of Red's missiles and
+  fires most of Blue's shots (4.0).
+- The other three end 17 NM behind their start, point away from Red 72 % of
+  the time, never come closer than 34 NM, fire 0.56 shots each, and are alive
+  at the 360 s cap.
+
+Under v1 this pays:
+- A loss (−150) costs more than a kill earns (+100), so a second jet only
+  joins in if it adds more than 1.5 kills per extra loss it risks.
+- One shooter avoids the no-engagement penalty.
+- The runners earn +10 each at the cap without any risk: +28 per fight, more
+  than the +25 Red-departure term earns (+4 per fight; Red fires only 6.5 of
+  its 24 missiles).
+- The −250 egress loss never touches them, because they do not die.
+
+**Changes** (keys in `scenarios/fitness.yaml`, all configurable):
+1. **Red alive: `red_alive: -40`** for each Red jet still alive and still in
+   the fight at the end.
+   - A Red that left out of missiles (Winchester) is out of the fight, so it
+     does **not** count as alive (`red_alive_counts_departed: false`). It
+     keeps the +25 departure term.
+   - The penalty also applies in no-engagement fights. Otherwise not fighting
+     (−300) would beat a fight with one loss, one shot and no kill
+     (−150 − 2 − 240 = −392). With it, not fighting scores −540.
+   - Red jets surviving is mission failure, so the runners now cost the team
+     about −40 for every Red jet they leave alive, and each kill is worth about
+     140.
+2. **Participation-gated survival bonus: `escape_min_shots: 1`.**
+   - The +10 per Blue jet alive at the time cap goes only to jets that fired
+     at least one missile during the fight. Participation means firing a
+     missile, with no range condition, so this does not force banzai
+     attacks.
+   - `escape_min_shots: 0` restores v1.
+
+**Re-scored on the 64-fight benchmark** (re-fly on this build, exact
+`fight_terms`; v1 = these two keys switched off):
+
+| network | v1 | v2 | kills | losses | escape v1 → v2 | Red alive | departs |
+|---|---|---|---|---|---|---|---|
+| earlier run's champion (lamb) | −6.4 (mean 23.0) | **−199.7** (mean −158.9) | +179.7 | −175.0 | +27.7 → +7.0 | −161.2 (4.03 Red/fight) | +4.3 |
+| HandBlue | −273.8 (mean −230.5) | **−407.5** (mean −357.5) | +218.8 | −449.2 | +11.2 → +4.8 | −120.6 (3.02) | +19.9 |
+
+Synthetic check (test): a lamb profile (one jet fires 4 and dies, three
+runners, 1.5 kills) beats a shared fight (all four fire, 2 kills, 1.5
+losses) under v1 (22 vs −16) and loses under v2 (−188 vs −176).
+
+The weights are part of the config hash, so a v1 run directory does not
+resume under v2. Start a new `-o`.

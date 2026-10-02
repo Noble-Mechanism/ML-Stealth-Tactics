@@ -1,4 +1,6 @@
-"""Spec 7 fitness v1 (approved by Rusty 2026-09-26) + Spec 8 deconfliction.
+"""Spec 7 fitness v2 (v1 approved by Rusty 2026-09-26; v2 2026-10-02) + Spec 8
+deconfliction. v2 adds the Red-alive penalty and gates the survival bonus on
+participation (a jet must have fired), against the "sacrificial lamb".
 
 All weights live in ``scenarios/fitness.yaml`` (or a file given per run) and
 are overridable key by key. ``fight_fitness`` scores one fight;
@@ -24,6 +26,9 @@ DEFAULT_WEIGHTS: Dict[str, float] = {
     "egress_off_deg": 120.0, "escape": 10.0, "escape_only_at_time_cap": True,
     "red_winchester_depart": 25.0, "shot": -2.0, "no_engagement_loss_only": True,
     "no_engagement": -300.0, "std_coef": 0.2,
+    # Fitness v2 (Rusty 2026-10-02): Red jets still alive and not departed at the
+    # end of the fight; survival bonus only for jets with >= escape_min_shots shots
+    "red_alive": -40.0, "red_alive_counts_departed": False, "escape_min_shots": 1,
     # Spec 8 D: Blue–Blue deconfliction (AND rule: < deconflict_nm AND < deconflict_alt_ft)
     "deconflict_nm": 5.0,
     "deconflict_alt_ft": 5000.0,
@@ -78,6 +83,7 @@ def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping,
     kill_ids = [e["target"] for e in res.events if e.get("type") == "kill"]
     blue_ids = set(egress_by_jet)
     blue_lost = [k for k in kill_ids if k in blue_ids] if blue_ids else []
+    all_shots = getattr(res, "shots", None) or []
     n_loss = int(res.red_kills)
     n_egress_loss = sum(1 for k in blue_lost if egress_by_jet.get(k))
     killed = set(kill_ids)
@@ -85,10 +91,29 @@ def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping,
                 if e.get("type") == "depart" and "winchester" in
                 (str(e.get("reason", "")) + str(e.get("text", ""))).lower()}
     departed = {d for d in departed if d and d not in killed and d not in blue_ids}
+    # v2: Red still in the fight at the end = alive and (by default) not departed
+    # for any reason (only Winchester departures exist since 2026-09-26)
+    departed_any = {e.get("observer") for e in res.events if e.get("type") == "depart"}
+    departed_any = {d for d in departed_any if d and d not in killed and d not in blue_ids}
+    red_alive_n = getattr(res, "red_alive", None)
+    if red_alive_n is None:
+        red_alive_n = max(0, int(n_red) - int(res.blue_kills))
+    red_present = int(red_alive_n) if w.get("red_alive_counts_departed", False) \
+        else max(0, int(red_alive_n) - len(departed_any))
     shots = int(getattr(res, "blue_shots", 0) or 0)
     engaged = shots > 0 or res.blue_kills > 0
-    escaped = int(res.blue_alive) if (not w["escape_only_at_time_cap"]
-                                      or res.end_reason == "time_cap") else 0
+    # v2: survival bonus per live Blue jet that fired >= escape_min_shots missiles
+    min_shots = int(w.get("escape_min_shots", 0) or 0)
+    if blue_ids:
+        fired = Counter(s.get("shooter") for s in all_shots if s.get("coalition") == "Blue")
+        alive_ids = [b for b in blue_ids if b not in killed]
+        n_alive = len(alive_ids)
+        n_part = sum(1 for b in alive_ids if fired.get(b, 0) >= min_shots)
+    else:                                   # no per-jet ids: count only
+        n_alive = int(res.blue_alive)
+        n_part = n_alive if min_shots <= 0 else 0
+    at_cap = (not w["escape_only_at_time_cap"]) or res.end_reason == "time_cap"
+    escaped = n_part if at_cap else 0
     # Spec 8 D: per conflict-pair-second, capped
     per_s = float(w.get("deconflict_per_s", 0.0))
     cap = float(w.get("deconflict_cap", 0.0))
@@ -102,6 +127,7 @@ def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping,
          "egress_losses": w["blue_loss_egress"] * n_egress_loss,
          "escape": w["escape"] * escaped,
          "red_winchester_departs": w["red_winchester_depart"] * len(departed),
+         "red_alive": float(w.get("red_alive", 0.0)) * red_present,
          "shots": w["shot"] * shots,
          "no_engagement": 0.0 if engaged else float(w.get("no_engagement", 0.0)),
          "deconflict": float(deconf)}
@@ -109,6 +135,7 @@ def fight_terms(res, n_red: int, egress_by_jet: Mapping[str, bool], w: Mapping,
         t.update(kills=0.0, escape=0.0, red_winchester_departs=0.0, shots=0.0)
     t["total"] = float(sum(v for k, v in t.items() if k != "total"))
     t.update(n_losses=n_loss, n_egress_losses=n_egress_loss, n_escaped=escaped,
+             n_alive_no_bonus=(n_alive - n_part) if at_cap else 0, n_red_present=red_present,
              n_red_departs=len(departed), engaged=engaged,
              deconflict_s=float(deconflict_s))
     return t

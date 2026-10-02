@@ -313,9 +313,9 @@ The genome GA (`ga/`) is untouched and stays the scripted baseline.
   crashed the population mean in Rusty's overnight run; it is still available
   through the config). Instead: *periodic immigration* (every 25 generations
   the next generation gets 8 newcomers in place of offspring: half random
-  nets, half mutated hall-of-fame cells outside the champion's lineage; one
-  of the 10 parent slots is reserved for recent immigrant lineages for 10
-  generations), and a *stagnation trigger* on the 10-generation moving
+  nets, half mutated hall-of-fame cells other than the champion's, at most 2
+  per cell, other founders first; since 2026-10-02 two of the 10 parent
+  slots are reserved for immigrant lineages for 25 generations), and a *stagnation trigger* on the 10-generation moving
   average of the best eval score (60 generations without a new high) that
   answers with a larger immigration (16). Elites, σ and the novelty weight of
   everyone else are untouched.
@@ -346,12 +346,15 @@ The genome GA (`ga/`) is untouched and stays the scripted baseline.
   `history.csv` / `history.json` (run directory, every generation, and the
   overnight `progress/` folder) hold best / mean / median / moving average,
   σ, immigration and stagnation events and champion decisions.
-- **Fitness:** spec 7 v1 (`stealth_tactics/fitness.py`, weights in
+- **Fitness:** spec 7 v2 (`stealth_tactics/fitness.py`, weights in
   `scenarios/fitness.yaml`, part of the config hash): kill 100 × 6 / n_red,
   loss −150 (−250 if egressing: heading > 120° off the nearest Red), +10 per
-  Blue alive at the 360 s cap, +25 per Red that leaves out of missiles, −2 per
-  shot; no shots and no kills → loss terms − 300 (v1.1); network fitness =
-  mean − 0.2 × std (v1.1). See `docs/specs/07-fitness.md`.
+  Blue alive at the 360 s cap **that fired at least one missile** (v2), +25
+  per Red that leaves out of missiles, **−40 per Red still alive and not
+  departed at the end** (v2), −2 per shot; no shots and no kills → loss terms
+  − 300 (v1.1) + the Red-alive penalty; network fitness = mean − 0.2 × std.
+  v2 answers the "sacrificial lamb" (one jet fights and dies, three run and
+  collect the survival bonus). See `docs/specs/07-fitness.md`.
 - **Play package (2026-09-26):** default Blue start is the 30 NM
   line-abreast wall (`scenarios/blue_wall_30nm.yaml`, Red placed relative to
   the wall centre; `--blue-start diamond` keeps the spec 4 diamond); default

@@ -258,6 +258,8 @@ scripts/overnight.sh -o runs/overnight
 | `--stagnation-gens` | 60 | generations without a new high of the moving average of the best score before a stagnation immigration (0 = off) |
 | `--stagnation-window` | 10 | moving-average window (generations) |
 | `--stagnation-immigrants` | 16 | newcomers when the stagnation trigger fires |
+| `--immigrant-protect-gens` | 25 | generations a newcomer lineage keeps its reserved parent slots |
+| `--immigrant-parent-slots` | 2 | parent slots (of 10) reserved for newcomer lineages |
 | `--top-n` | 3 | networks (top by eval fitness) benchmarked every generation |
 | `--champion-k` | 1 | a challenger must beat the champion by more than k standard errors of the paired benchmark difference (0 = higher score wins) |
 | `--every` | 10 | progress outputs every N generations |
@@ -277,8 +279,10 @@ and checks they reproduce byte-for-byte, then re-exports the ACMIs):
 ```
 
 **Caveat:** the Blue performance model is generous for an F-35 (treat it as
-Raptor-like). Fitness weights are v1.1 (`docs/specs/07-fitness.md`; no-engagement
-penalty −300, network fitness = mean − 0.2 × std).
+Raptor-like). Fitness weights are v2 (`docs/specs/07-fitness.md`; no-engagement
+penalty −300, −40 per Red jet still alive and not departed at the end, the +10
+survival bonus only for jets that fired a missile, network fitness = mean −
+0.2 × std).
 
 ## Neural policy and neuroevolution (Spec 6)
 
@@ -301,7 +305,7 @@ benchmark, held-out test, champion lineage), `history.csv` / `history.json`
 (spec 6b, written every generation) and `timing.jsonl`. Genomes carry
 `n_networks` (1 today; per-element / per-jet networks are deferred) and an
 interface fingerprint, so an incompatible file is refused, not misread.
-Fitness is v1.1 (spec 7, `scenarios/fitness.yaml`). See
+Fitness is v2 (spec 7, `scenarios/fitness.yaml`). See
 `docs/specs/06-neural-policy-neuroevolution.md`, `docs/specs/06b-ga-stability.md`
 (immigration, moving-average stagnation trigger, fair champion pick) and
 `docs/specs/07-fitness.md`.
